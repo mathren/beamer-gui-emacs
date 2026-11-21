@@ -1,0 +1,3 @@
+[submodule "beamer_template_mrenzo"]
+	path = beamer_template_mrenzo
+	url = git@github.com:mathren/beamer_template_mrenzo.git
