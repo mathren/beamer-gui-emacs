@@ -1,0 +1,13 @@
+# Conda environment for beamer-gui (GUI and Python tests).
+#   conda env create -f environment.yml
+# LaTeX (pdflatex with beamer, textpos, tikz) comes from your TeX distribution.
+name: beamer-gui
+channels:
+  - conda-forge
+dependencies:
+  - python >=3.10
+  - pyside6 >=6.5
+  - pymupdf >=1.24      # provides `import pymupdf`
+  # development
+  - pytest
+  - flake8
