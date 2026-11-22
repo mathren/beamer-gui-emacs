@@ -47,7 +47,9 @@
 ;; Pasted images are saved in `beamer-gui-image-dir-name' next to the
 ;; source file.  The GUI (beamer_gui.py) needs PySide6 and PyMuPDF.
 ;;
-;; Entry point: `beamer-gui-edit-frame'.
+;; Entry point: `beamer-gui-edit-frame', bound to C-c + in
+;; `beamer-gui-mode', a minor mode to enable in LaTeX buffers.  Set
+;; `beamer-gui-python' to the Python with PySide6 and PyMuPDF.
 
 ;;; Code:
 
@@ -72,8 +74,11 @@
   :type 'string)
 
 (defcustom beamer-gui-python "python3"
-  "Python interpreter with PySide6 and PyMuPDF installed."
-  :type 'string)
+  "Python interpreter that runs the GUI.
+It must provide PySide6 and PyMuPDF 1.24 or later, for example the
+python of the conda environment of environment.yml.  A command name
+is looked up in the variable `exec-path'; a file name is used as is."
+  :type '(file :tag "Interpreter or command"))
 
 (defcustom beamer-gui-script
   (expand-file-name "beamer_gui.py"
@@ -659,6 +664,24 @@ Saving in the GUI rewrites the elements in this buffer."
       (beamer-gui--compile-background
        session (lambda (pdf) (beamer-gui--start-gui session pdf)))
       (message "beamer-gui: compiling frame..."))))
+
+;;;; Minor mode
+
+(defvar beamer-gui-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; C-c followed by punctuation is the space for minor modes; + is
+    ;; not used by AUCTeX or RefTeX.
+    (define-key map (kbd "C-c +") #'beamer-gui-edit-frame)
+    map)
+  "Keymap of `beamer-gui-mode'.")
+
+;;;###autoload
+(define-minor-mode beamer-gui-mode
+  "Minor mode giving a key to edit the beamer frame at point.
+
+\\{beamer-gui-mode-map}"
+  :lighter " BGui"
+  :keymap beamer-gui-mode-map)
 
 (provide 'beamer-gui)
 ;;; beamer-gui.el ends here

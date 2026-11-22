@@ -356,6 +356,18 @@ Skip the test if pdflatex is missing; fail if compilation fails."
       (should (equal once (buffer-string))))))
 
 
+;;;; Minor mode
+
+(ert-deftest bgt-mode-key ()
+  "The key works only with `beamer-gui-mode' enabled."
+  (with-temp-buffer
+    (should-not (eq (key-binding (kbd "C-c +")) #'beamer-gui-edit-frame))
+    (beamer-gui-mode 1)
+    (should (eq (key-binding (kbd "C-c +")) #'beamer-gui-edit-frame))
+    (beamer-gui-mode -1)
+    (should-not (eq (key-binding (kbd "C-c +")) #'beamer-gui-edit-frame))))
+
+
 ;;;; Org
 
 (ert-deftest bgt-org-bounds-parse-apply ()
