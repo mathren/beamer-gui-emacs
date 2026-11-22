@@ -671,7 +671,7 @@ Saving in the GUI rewrites the elements in this buffer."
   (let ((map (make-sparse-keymap)))
     ;; C-c followed by punctuation is the space for minor modes; + is
     ;; not used by AUCTeX or RefTeX.
-    (define-key map (kbd "C-c +") #'beamer-gui-edit-frame)
+    (define-key map (kbd "C-c C-g") #'beamer-gui-edit-frame)
     map)
   "Keymap of `beamer-gui-mode'.")
 
