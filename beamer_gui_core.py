@@ -54,6 +54,45 @@ def to_frac(pixels, size):
     return round(clamp(pixels / size), 4)
 
 
+HANDLES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
+
+
+def resize_box(box, handle, dx, dy, aspect=None, min_size=10.0, max_size=None):
+    """Return BOX (x, y, w, h) resized by dragging HANDLE by DX, DY.
+
+    HANDLE is a compass point of HANDLES; the opposite side or corner
+    stays fixed.  With ASPECT (height / width) the ratio is kept: an
+    edge handle drives its own dimension, a corner the one moved most.
+    Sizes are kept between MIN_SIZE and MAX_SIZE (w, h)."""
+    x, y, w, h = box
+    left, top, right, bottom = x, y, x + w, y + h
+    if "w" in handle:
+        left += dx
+    if "e" in handle:
+        right += dx
+    if "n" in handle:
+        top += dy
+    if "s" in handle:
+        bottom += dy
+    w, h = right - left, bottom - top
+    if aspect:
+        horizontal = handle in ("e", "w") or (
+            len(handle) == 2 and abs(dx) * aspect >= abs(dy))
+        if horizontal:
+            h = w * aspect
+        else:
+            w = h / aspect
+    max_w, max_h = max_size or (float("inf"), float("inf"))
+    w = min(max(w, min_size), max_w)
+    h = min(max(h, min_size), max_h)
+    if aspect:  # clamping one side must not break the ratio
+        if h != w * aspect:
+            w, h = min(w, h / aspect), min(h, w * aspect)
+    new_x = x + (box[2] - w) if "w" in handle else x
+    new_y = y + (box[3] - h) if "n" in handle else y
+    return new_x, new_y, w, h
+
+
 def is_image_file(path):
     """Return True if PATH has an image extension."""
     return os.path.splitext(path)[1].lower() in IMAGE_EXTS

@@ -18,13 +18,12 @@ import sys
 
 import pymupdf
 from PySide6.QtCore import QPointF, QRectF, QSocketNotifier, Qt
-from PySide6.QtGui import (QAction, QBrush, QColor, QImage, QKeySequence,
+from PySide6.QtGui import (QAction, QBrush, QColor, QImage, QKeySequence, QPainter,
                            QPainterPath, QPen, QPixmap, QPolygonF)
-from PySide6.QtWidgets import (QApplication, QGraphicsEllipseItem,
-                               QGraphicsItem, QGraphicsPathItem,
+from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem,
                                QGraphicsPixmapItem, QGraphicsRectItem,
-                               QGraphicsScene, QGraphicsSimpleTextItem,
-                               QGraphicsView, QMainWindow, QToolBar)
+                               QGraphicsScene, QGraphicsView, QMainWindow,
+                               QToolBar)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import beamer_gui_core as core  # noqa: E402
@@ -34,6 +33,8 @@ SHAPE_PEN = QPen(QColor("red"), 3)
 HANDLE_COLOR = QColor("#1e88e5")
 RAW_HEIGHT = 40                 # textblock heights are unknown: fixed box
 MIN_SIZE = 5
+HANDLE = 9                      # handle side, pixels
+PAGE_MARGIN = 0.25              # scrollable margin around the page, fraction
 
 
 # ---- rendering ------------------------------------------------------------
@@ -67,10 +68,10 @@ def placeholder_pixmap():
 # ---- elements -------------------------------------------------------------
 
 class Handle(QGraphicsRectItem):
-    """Draggable square child; reports its scene position to ON_MOVE."""
+    """Draggable square child of an arrow; reports its scene position."""
 
     def __init__(self, parent, on_move):
-        super().__init__(-5, -5, 10, 10, parent)
+        super().__init__(-HANDLE / 2, -HANDLE / 2, HANDLE, HANDLE, parent)
         self.on_move = on_move
         self.placing = False
         self.setBrush(QBrush(HANDLE_COLOR))
@@ -92,8 +93,8 @@ class Handle(QGraphicsRectItem):
 class Element:
     """Behaviour shared by all elements; mixed into a QGraphicsItem.
 
-    Subclasses define KIND, resize_to(scene_pos), handle_pos() and
-    geometry() (the kind-specific fields, as page fractions)."""
+    Subclasses define KIND and geometry() (the kind-specific fields,
+    as page fractions)."""
 
     kind = None
 
@@ -105,10 +106,6 @@ class Element:
         if "x" in data:
             self.setPos(editor.to_scene(data["x"], data["y"]))
 
-    def add_resize_handle(self):
-        self.handle = Handle(self, self.resize_to)
-        self.handle.place(self.handle_pos())
-
     def frac_pos(self):
         return self.editor.to_frac(self.pos())
 
@@ -116,56 +113,156 @@ class Element:
         return {"kind": self.kind, "id": self.id, **self.geometry()}
 
 
-class ImageItem(QGraphicsPixmapItem, Element):
+class BoxItem(QGraphicsRectItem, Element):
+    """Element drawn in its rectangle, resized by 8 handles when selected.
+
+    A drag moves the opposite side or corner by exactly the mouse
+    displacement since the press, so resizing cannot run away.  Sizes
+    are limited to the page.  Subclasses set ASPECT_LOCKED, HANDLES and
+    draw_content(painter, rect)."""
+
+    aspect_locked = False
+    handles = core.HANDLES
+    CURSORS = {"nw": Qt.SizeFDiagCursor, "se": Qt.SizeFDiagCursor,
+               "ne": Qt.SizeBDiagCursor, "sw": Qt.SizeBDiagCursor,
+               "n": Qt.SizeVerCursor, "s": Qt.SizeVerCursor,
+               "e": Qt.SizeHorCursor, "w": Qt.SizeHorCursor}
+
+    def __init__(self, editor, data, width, height):
+        super().__init__(0, 0, width, height)
+        self.setup(editor, data)
+        self.setAcceptHoverEvents(True)
+        self.drag = None            # (handle, start box, press scene pos)
+
+    # geometry
+    def box(self):
+        return (self.x(), self.y(), self.rect().width(), self.rect().height())
+
+    def set_box(self, x, y, w, h):
+        self.prepareGeometryChange()
+        self.setPos(x, y)
+        self.setRect(0, 0, w, h)
+
+    def aspect(self):
+        r = self.rect()
+        return r.height() / r.width() if self.aspect_locked else None
+
+    def handle_points(self):
+        r = self.rect()
+
+        def point(h):
+            x = r.left() if "w" in h else r.right() if "e" in h else r.center().x()
+            y = r.top() if "n" in h else r.bottom() if "s" in h else r.center().y()
+            return QPointF(x, y)
+        return {h: point(h) for h in self.handles}
+
+    def handle_at(self, local):
+        if not self.isSelected():
+            return None
+        for name, p in self.handle_points().items():
+            if abs(local.x() - p.x()) <= HANDLE and abs(local.y() - p.y()) <= HANDLE:
+                return name
+        return None
+
+    def begin_resize(self, handle, scene_pos):
+        self.drag = (handle, self.box(), QPointF(scene_pos))
+
+    def resize_drag(self, scene_pos):
+        handle, start, press = self.drag
+        d = scene_pos - press
+        self.set_box(*core.resize_box(start, handle, d.x(), d.y(), aspect=self.aspect(),
+                                      min_size=MIN_SIZE * 2,
+                                      max_size=(self.editor.W, self.editor.H)))
+
+    def itemChange(self, change, value):
+        # A selected element comes to the front, so its handles can be
+        # grabbed even where another element overlaps them.
+        if change == QGraphicsItem.ItemSelectedHasChanged:
+            self.setZValue(1 if value else 0)
+        return super().itemChange(change, value)
+
+    # drawing
+    def boundingRect(self):
+        return self.rect().adjusted(-HANDLE, -HANDLE, HANDLE, HANDLE)
+
+    def paint(self, painter, option, widget=None):
+        self.draw_content(painter, self.rect())
+        if self.isSelected():
+            painter.setPen(QPen(HANDLE_COLOR, 1, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(self.rect())
+            painter.setPen(QPen(Qt.white, 1))
+            painter.setBrush(QBrush(HANDLE_COLOR))
+            for p in self.handle_points().values():
+                painter.drawRect(QRectF(p.x() - HANDLE / 2, p.y() - HANDLE / 2, HANDLE, HANDLE))
+
+    # mouse
+    def hoverMoveEvent(self, event):
+        handle = self.handle_at(event.pos())
+        self.setCursor(self.CURSORS[handle] if handle else Qt.SizeAllCursor)
+        super().hoverMoveEvent(event)
+
+    def mousePressEvent(self, event):
+        handle = self.handle_at(event.pos())
+        if handle and event.button() == Qt.LeftButton:
+            self.begin_resize(handle, event.scenePos())
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.drag:
+            self.resize_drag(event.scenePos())
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.drag:
+            self.drag = None
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def frac_size(self):
+        return self.editor.to_frac(self.rect().bottomRight())
+
+
+class ImageItem(BoxItem):
+    """Image; height follows width, as \\includegraphics[width=...] does."""
     kind = "image"
+    aspect_locked = True
 
     def __init__(self, editor, data):
         self.file = data["file"]
         path = core.resolve_image(self.file, editor.tex_dir, editor.graphics_path)
-        super().__init__(load_pixmap(path) or placeholder_pixmap())
-        self.setup(editor, data)
-        self.setTransformationMode(Qt.SmoothTransformation)
-        self.set_width(data["w"] * editor.W)
-        self.add_resize_handle()
-        self.handle.setScale(1 / self.scale())
+        self.pixmap = load_pixmap(path) or placeholder_pixmap()
+        width = data["w"] * editor.W
+        super().__init__(editor, data, width,
+                         width * self.pixmap.height() / self.pixmap.width())
 
-    def set_width(self, width):
-        self.setScale(max(width, 2 * MIN_SIZE) / self.pixmap().width())
-
-    def handle_pos(self):
-        return QPointF(self.pixmap().width(), self.pixmap().height())
-
-    def resize_to(self, scene_pos):
-        self.set_width(scene_pos.x() - self.scenePos().x())
-        self.handle.place(self.handle_pos())
-        self.handle.setScale(1 / self.scale())
+    def draw_content(self, painter, rect):
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.drawPixmap(rect, self.pixmap, QRectF(self.pixmap.rect()))
 
     def geometry(self):
         x, y = self.frac_pos()
-        return {"file": self.file, "x": x, "y": y,
-                "w": core.to_frac(self.pixmap().width() * self.scale(), self.editor.W)}
+        return {"file": self.file, "x": x, "y": y, "w": self.frac_size()[0]}
 
 
-class EllipseItem(QGraphicsEllipseItem, Element):
+class EllipseItem(BoxItem):
     kind = "ellipse"
 
     def __init__(self, editor, data):
-        super().__init__(0, 0, data["w"] * editor.W, data["h"] * editor.H)
-        self.setup(editor, data)
-        self.setPen(SHAPE_PEN)
-        self.add_resize_handle()
+        super().__init__(editor, data, data["w"] * editor.W, data["h"] * editor.H)
 
-    def handle_pos(self):
-        return self.rect().bottomRight()
-
-    def resize_to(self, scene_pos):
-        size = scene_pos - self.scenePos()
-        self.setRect(0, 0, max(size.x(), MIN_SIZE), max(size.y(), MIN_SIZE))
-        self.handle.place(self.handle_pos())
+    def draw_content(self, painter, rect):
+        painter.setPen(SHAPE_PEN)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(rect)
 
     def geometry(self):
-        x, y = self.frac_pos()
-        w, h = self.editor.to_frac(self.rect().bottomRight())
+        (x, y), (w, h) = self.frac_pos(), self.frac_size()
         return {"x": x, "y": y, "w": w, "h": h}
 
 
@@ -205,29 +302,26 @@ class ArrowItem(QGraphicsPathItem, Element):
         return {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
 
 
-class RawItem(QGraphicsRectItem, Element):
-    """Any other tagged block: drawn in the background, only moved here."""
+class RawItem(BoxItem):
+    """Any other tagged block: drawn in the background, only moved and
+    narrowed or widened here (its height is set by its content)."""
     kind = "raw"
+    handles = ("e", "w")
 
     def __init__(self, editor, data):
         self.body = data["body"]
-        super().__init__(0, 0, data["w"] * editor.W, RAW_HEIGHT)
-        self.setup(editor, data)
-        self.setPen(QPen(HANDLE_COLOR, 1, Qt.DashLine))
-        QGraphicsSimpleTextItem(self.id, self).setBrush(QBrush(HANDLE_COLOR))
-        self.add_resize_handle()
+        super().__init__(editor, data, data["w"] * editor.W, RAW_HEIGHT)
 
-    def handle_pos(self):
-        return self.rect().bottomRight()
-
-    def resize_to(self, scene_pos):
-        self.setRect(0, 0, max((scene_pos - self.scenePos()).x(), 2 * MIN_SIZE), RAW_HEIGHT)
-        self.handle.place(self.handle_pos())
+    def draw_content(self, painter, rect):
+        painter.setPen(QPen(HANDLE_COLOR, 1, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(rect)
+        painter.setPen(HANDLE_COLOR)
+        painter.drawText(rect.adjusted(4, 2, 0, 0), Qt.AlignLeft | Qt.AlignTop, self.id)
 
     def geometry(self):
         x, y = self.frac_pos()
-        return {"body": self.body, "x": x, "y": y,
-                "w": core.to_frac(self.rect().width(), self.editor.W)}
+        return {"body": self.body, "x": x, "y": y, "w": self.frac_size()[0]}
 
 
 KINDS = {cls.kind: cls for cls in (ImageItem, EllipseItem, ArrowItem, RawItem)}
@@ -247,7 +341,8 @@ class Editor(QMainWindow):
         self.setWindowTitle(f"beamer-gui: {session['stem']}")
 
         self.scene = QGraphicsScene()
-        self.setCentralWidget(QGraphicsView(self.scene))
+        self.view = QGraphicsView(self.scene)
+        self.setCentralWidget(self.view)
         self.background = QGraphicsPixmapItem()
         self.background.setZValue(-1)
         self.scene.addItem(self.background)
@@ -261,6 +356,7 @@ class Editor(QMainWindow):
 
         self.build_toolbar()
         self.resize(int(self.W) + 40, int(self.H) + 90)
+        self.view.centerOn(self.W / 2, self.H / 2)
         if listen_stdin and not sys.stdin.isatty():
             self.notifier = QSocketNotifier(sys.stdin.fileno(), QSocketNotifier.Read)
             self.notifier.activated.connect(self.read_stdin)
@@ -276,7 +372,9 @@ class Editor(QMainWindow):
         pm = render_pdf(pdf, SCENE_WIDTH)
         self.background.setPixmap(pm)
         self.W, self.H = float(pm.width()), float(pm.height())
-        self.scene.setSceneRect(QRectF(0, 0, self.W, self.H))
+        m = PAGE_MARGIN
+        self.scene.setSceneRect(QRectF(-m * self.W, -m * self.H,
+                                       (1 + 2 * m) * self.W, (1 + 2 * m) * self.H))
 
     def build_toolbar(self):
         toolbar = QToolBar()

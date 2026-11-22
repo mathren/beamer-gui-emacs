@@ -63,6 +63,16 @@ def test_to_frac_clamps_and_rounds():
     assert core.to_frac(5000, 1200) == 1.5
 
 
+def test_resize_box_core():
+    box = (10, 10, 100, 50)
+    assert core.resize_box(box, "se", 20, 0, aspect=0.5) == (10, 10, 120, 60)
+    assert core.resize_box(box, "nw", -20, 0, aspect=0.5) == (-10, 0, 120, 60)
+    assert core.resize_box(box, "n", 0, -10) == (10, 0, 100, 60)
+    assert core.resize_box(box, "w", 500, 0, min_size=10) == (100, 10, 10, 50)
+    assert core.resize_box(box, "e", 5000, 0, aspect=0.5,
+                           max_size=(1200, 675)) == (10, 10, 1200, 600)
+
+
 def test_is_image_file_and_safe_stem():
     assert core.is_image_file("a.PNG") and core.is_image_file("b.pdf")
     assert not core.is_image_file("c.txt")
@@ -73,6 +83,9 @@ def test_is_image_file_and_safe_stem():
 # ---- offscreen GUI --------------------------------------------------------
 
 pytest.importorskip("PySide6")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import QPointF  # noqa: E402
+import beamer_gui  # noqa: E402
 
 ITEMS = [
     {"kind": "image", "id": "img1", "file": "fig_slides/g.png", "x": 0.1, "y": 0.2, "w": 0.3},
@@ -118,7 +131,6 @@ def session(app, tmp_path):
 
 @pytest.fixture
 def editor(session):
-    import beamer_gui
     return beamer_gui.Editor(session, listen_stdin=False)
 
 
@@ -145,18 +157,103 @@ def test_roundtrip(editor):
                 assert out[item["id"]][key] == value
 
 
-def test_move_and_resize(editor):
-    from PySide6.QtCore import QPointF
+def test_move(editor):
     el, W, H = elements(editor), editor.W, editor.H
     el["img1"].setPos(0.5 * W, 0.5 * H)
-    el["ellipse1"].handle.setPos(QPointF(0.3 * W, 0.2 * H))      # resize handle
-    el["arrow1"].handles[1].setPos(QPointF(0.1 * W, 0.1 * H))    # arrow tip
     out = by_id(editor)
     assert out["img1"]["x"] == 0.5 and out["img1"]["y"] == 0.5
-    assert_close(out["ellipse1"], w=0.3, h=0.2)
-    assert_close(out["arrow1"], x2=0.1, y2=0.1)
+    el["arrow1"].handles[1].setPos(QPointF(0.1 * W, 0.1 * H))    # arrow tip
+    assert_close(by_id(editor)["arrow1"], x2=0.1, y2=0.1)
     el["arrow1"].setPos(0.1 * W, 0.1 * H)                         # whole arrow
     assert_close(by_id(editor)["arrow1"], x1=0.7, y1=0.3, x2=0.2, y2=0.2)
+
+
+def drag_handle(item, handle, dx, dy, steps=10):
+    """Drag HANDLE of ITEM by DX, DY page fractions, in STEPS moves."""
+    ed = item.editor
+    start = item.mapToScene(item.handle_points()[handle])
+    item.begin_resize(handle, start)
+    for i in range(1, steps + 1):
+        item.resize_drag(start + QPointF(dx * ed.W, dy * ed.H) * (i / steps))
+
+
+@pytest.mark.parametrize("handle", ["nw", "n", "ne", "e", "se", "s", "sw", "w"])
+def test_resize_every_handle_keeps_opposite_fixed(editor, handle):
+    item = elements(editor)["ellipse1"]          # x .4 y .4 w .2 h .1
+    drag_handle(item, handle, 0.05, 0.05)
+    out = by_id(editor)["ellipse1"]
+    right, bottom = out["x"] + out["w"], out["y"] + out["h"]
+    if "w" in handle:
+        assert_close(out, x=0.45, w=0.15)
+    elif "e" in handle:
+        assert_close(out, x=0.4, w=0.25)
+    else:
+        assert_close(out, x=0.4, w=0.2)
+    if "n" in handle:
+        assert_close(out, y=0.45, h=0.05)
+    elif "s" in handle:
+        assert_close(out, y=0.4, h=0.15)
+    else:
+        assert_close(out, y=0.4, h=0.1)
+    assert right <= 0.65 + TOL and bottom <= 0.55 + TOL
+
+
+@pytest.mark.parametrize("handle", ["nw", "n", "ne", "e", "se", "s", "sw", "w"])
+def test_resize_image_keeps_aspect(editor, handle):
+    item = elements(editor)["img1"]              # 100x50 pixmap
+    drag_handle(item, handle, 0.03, 0.04)
+    r = item.rect()
+    assert abs(r.height() / r.width() - 0.5) < 1e-6
+
+
+def test_resize_follows_mouse_exactly(editor):
+    """Regression: resizing ran away, growing faster than the mouse."""
+    item = elements(editor)["img1"]
+    w0 = item.rect().width()
+    drag_handle(item, "e", 0.1, 0, steps=50)
+    assert abs(item.rect().width() - (w0 + 0.1 * editor.W)) < 1e-6
+    drag_handle(item, "e", -0.1, 0, steps=50)    # and back
+    assert abs(item.rect().width() - w0) < 1e-6
+
+
+def test_resize_limited_to_page(editor):
+    item = elements(editor)["img1"]
+    drag_handle(item, "se", 5, 5)
+    assert item.rect().width() <= editor.W + 1e-6
+    assert item.rect().height() <= editor.H + 1e-6
+    drag_handle(item, "se", -5, -5)              # still recoverable
+    assert item.rect().width() >= 2 * beamer_gui.MIN_SIZE - 1e-6
+
+
+def test_resize_with_real_mouse_events(editor, app):
+    """Press on the bottom-right handle, move, release, through the view."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    item = elements(editor)["ellipse1"]
+    item.setSelected(True)
+    view = editor.view
+    editor.show()
+
+    def send(kind, scene_pt, buttons):
+        p = view.mapFromScene(scene_pt)
+        ev = QMouseEvent(kind, QPointF(p), QPointF(view.viewport().mapToGlobal(p)),
+                         Qt.LeftButton, buttons, Qt.NoModifier)
+        QApplication.sendEvent(view.viewport(), ev)
+
+    start = item.mapToScene(item.handle_points()["se"])
+    w0 = item.rect().width()
+    send(QEvent.MouseButtonPress, start, Qt.LeftButton)
+    for i in range(1, 21):
+        send(QEvent.MouseMove, start + QPointF(3 * i, 0), Qt.LeftButton)
+    send(QEvent.MouseButtonRelease, start + QPointF(60, 0), Qt.NoButton)
+    # The handle lies on the edge of the raw block t1, which is above
+    # the ellipse in stacking order: selection must bring it forward.
+    assert abs(item.rect().width() - (w0 + 60)) <= 2
+
+
+def test_raw_only_has_width_handles(editor):
+    assert set(elements(editor)["t1"].handle_points()) == {"e", "w"}
 
 
 def test_add_delete_and_stacking_order(editor):
