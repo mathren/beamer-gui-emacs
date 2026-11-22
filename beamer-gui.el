@@ -47,7 +47,7 @@
 ;; Pasted images are saved in `beamer-gui-image-dir-name' next to the
 ;; source file.  The GUI (beamer_gui.py) needs PySide6 and PyMuPDF.
 ;;
-;; Entry point: `beamer-gui-edit-frame', bound to C-c + in
+;; Entry point: `beamer-gui-edit-frame', bound to C-c g in
 ;; `beamer-gui-mode', a minor mode to enable in LaTeX buffers.  Set
 ;; `beamer-gui-python' to the Python with PySide6 and PyMuPDF.
 
@@ -669,9 +669,10 @@ Saving in the GUI rewrites the elements in this buffer."
 
 (defvar beamer-gui-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; C-c followed by punctuation is the space for minor modes; + is
-    ;; not used by AUCTeX or RefTeX.
-    (define-key map (kbd "C-c C-g") #'beamer-gui-edit-frame)
+    ;; C-c followed by a letter is reserved for users by the GNU key
+    ;; binding conventions; this binding is the author's choice and is
+    ;; easy to change in this map.
+    (define-key map (kbd "C-c g") #'beamer-gui-edit-frame)
     map)
   "Keymap of `beamer-gui-mode'.")
 

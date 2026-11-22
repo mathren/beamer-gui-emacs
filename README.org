@@ -21,7 +21,7 @@ emacs -Q -l quicktry.el path/to/beamer_source.tex
 ** Usage
 
 1. Once per document: =M-x beamer-gui-insert-preamble=.
-2. With point in a frame: =C-c C-g= (=beamer-gui-edit-frame=), in
+2. With point in a frame: =C-c g= (=beamer-gui-edit-frame=), in
    buffers where =beamer-gui-mode= is on.
 3. In the GUI: drag and resize elements, =A= adds an arrow, =E= an
    ellipse, =C-v= pastes an image (saved in =fig_slides/=), =Del=
@@ -52,7 +52,7 @@ Install from the latest commit of =main= (Emacs 30.1 or later):
   :vc (:url "https://github.com/mathren/beamer-gui-emacs"
        :branch "main"
        :rev :newest)
-  ;; C-c + opens the frame at point in the GUI.
+  ;; C-c g opens the frame at point in the GUI.
   :hook ((LaTeX-mode latex-mode) . beamer-gui-mode)
   :custom
   ;; Python with PySide6 and PyMuPDF, as printed by `conda run' above.
@@ -60,12 +60,14 @@ Install from the latest commit of =main= (Emacs 30.1 or later):
    "/path/to/envs/beamer-gui/bin/python3"))
 #+end_src
 
-=LaTeX-mode= is AUCTeX's mode, =latex-mode= the built-in one.  To
-use another key, bind =beamer-gui-edit-frame= in
-=beamer-gui-mode-map=, for example =C-c b= (=C-c= followed by a letter
-is reserved for users):
+=LaTeX-mode= is AUCTeX's mode, =latex-mode= the built-in one.
+
+=C-c= followed by a letter is the range the GNU conventions reserve
+for users, so =C-c g= may clash with one of your own bindings.  To use
+another key, for example =C-c += (a range meant for minor modes):
 
 #+begin_src emacs-lisp
 (with-eval-after-load 'beamer-gui
-  (keymap-set beamer-gui-mode-map "C-c b" #'beamer-gui-edit-frame))
+  (keymap-unset beamer-gui-mode-map "C-c g")
+  (keymap-set beamer-gui-mode-map "C-c +" #'beamer-gui-edit-frame))
 #+end_src

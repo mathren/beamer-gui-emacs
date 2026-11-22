@@ -361,11 +361,11 @@ Skip the test if pdflatex is missing; fail if compilation fails."
 (ert-deftest bgt-mode-key ()
   "The key works only with `beamer-gui-mode' enabled."
   (with-temp-buffer
-    (should-not (eq (key-binding (kbd "C-c C-g")) #'beamer-gui-edit-frame))
+    (should-not (eq (key-binding (kbd "C-c g")) #'beamer-gui-edit-frame))
     (beamer-gui-mode 1)
-    (should (eq (key-binding (kbd "C-c C-g")) #'beamer-gui-edit-frame))
+    (should (eq (key-binding (kbd "C-c g")) #'beamer-gui-edit-frame))
     (beamer-gui-mode -1)
-    (should-not (eq (key-binding (kbd "C-c C-g")) #'beamer-gui-edit-frame))))
+    (should-not (eq (key-binding (kbd "C-c g")) #'beamer-gui-edit-frame))))
 
 
 ;;;; Org
