@@ -48,29 +48,36 @@
 `conda env create -f environment.yml' or set BEAMER_GUI_PYTHON" python))))
 
 (defconst quicktry-sample
-  "\\documentclass[aspectratio=169]{beamer}
+  (concat
+   "\\documentclass[aspectratio=169,xcolor=dvipsnames]{beamer}
 \\usepackage{pgfpages}
+\\usepackage{tcolorbox}
 %% Notes for pdfpc: the editor ignores this option.
 %% \\setbeameroption{show notes on second screen=right}
-%% beamer-gui
-\\RequirePackage{tikz}
-\\makeatletter\\@ifpackageloaded{textpos}{}{\\usepackage[absolute,overlay]{textpos}}\\makeatother
-\\tikzset{gui arrow/.style={->,>=stealth,line width=2pt,red},
-         gui ellipse/.style={line width=2pt,red}}
-\\begin{document}
+\\definecolor{bblue}{HTML}{144b7a}
+" beamer-gui-preamble
+   "\\begin{document}
 \\begin{frame}{Try beamer-gui}
-  Put point here and run \\texttt{M-x beamer-gui-edit-frame}.
-\\begin{textblock*}{0.35\\paperwidth}(0.55\\paperwidth,0.3\\paperheight) % gui:img1
-  \\includegraphics[width=\\linewidth]{fig_slides/example.pdf}
+  Put point here and press C-c g, or run \\texttt{M-x beamer-gui-edit-frame}.
+  \\begin{center}
+    \\includegraphics[width=0.25\\textwidth]{fig_slides/example.pdf}
+  \\end{center}
+  \\begin{block}{A block}
+    Drag me: the rest of the slide stays in place.
+  \\end{block}
+  \\begin{tcolorbox}[colback=bblue!10]
+    A tcolorbox.
+  \\end{tcolorbox}
+%%% beamer-gui arrow1
+\\begin{textblock*}{0.25\\paperwidth}(0.6\\paperwidth,0.25\\paperheight)
+  \\tikz[x=\\paperwidth,y=\\paperheight]{\\useasboundingbox (0,0) rectangle (0.25,-0.1); \\draw[gui arrow, draw=bblue] (0,-0.1) to (0.25,-0);}
 \\end{textblock*}
-\\begin{textblock*}{0.25\\paperwidth}(0.2\\paperwidth,0.55\\paperheight) % gui:arrow1
-  \\tikz[x=\\paperwidth,y=\\paperheight]{\\useasboundingbox (0,0) rectangle (0.25,-0.1); \\draw[gui arrow,overlay] (0,-0.1) -- (0.25,-0);}
-\\end{textblock*}
+%%% ---
   \\note{A note for the second screen.}
 \\end{frame}
 \\end{document}
-"
-  "Sample deck with an image and an arrow.")
+")
+  "Sample deck with movable elements of the text and an arrow.")
 
 (defun quicktry-open-sample ()
   "Write the sample deck in a temporary directory and visit it."
