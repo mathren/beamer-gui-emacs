@@ -240,3 +240,21 @@ def snap_offset(values, targets, tolerance=SNAP_TOLERANCE):
             if abs(d) <= tolerance and (best is None or abs(d) < abs(best[0])):
                 best = (d, t)
     return best or (0.0, None)
+
+
+# ---- frame background --------------------------------------------------------
+
+def split_tint(color):
+    """Return (NAME, TINT) of an xcolor expression NAME!TINT (TINT 100 if none)."""
+    name, _, tint = (color or "").partition("!")
+    try:
+        return name, int(float(tint)) if tint else 100
+    except ValueError:
+        return color, 100
+
+
+def join_tint(name, tint):
+    """Return the xcolor expression for NAME at TINT percent, or ""."""
+    if not name:
+        return ""
+    return name if tint >= 100 else f"{name}!{tint}"

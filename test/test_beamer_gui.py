@@ -94,6 +94,15 @@ def test_style_per_kind():
     assert core.format_style({"tips": "<->", "dash": "solid"}, [], "arrow") == "<->"
 
 
+def test_tint():
+    assert core.split_tint("bblue!20") == ("bblue", 20)
+    assert core.split_tint("bblue") == ("bblue", 100)
+    assert core.split_tint("") == ("", 100)
+    assert core.join_tint("bblue", 20) == "bblue!20"
+    assert core.join_tint("bblue", 100) == "bblue"
+    assert core.join_tint("", 50) == ""
+
+
 def test_line_width_and_bend():
     assert core.line_width_pt(None) == core.BASE_LINE_WIDTH
     assert core.line_width_pt("thick") == 0.8
@@ -168,7 +177,8 @@ def session(app, tmp_path):
     return {"background": str(tmp_path / "bg.pdf"), "page_a": 0, "page_b": 1, "page_s": 2,
             "paper": [page.rect.width, page.rect.height], "colors": colors,
             "tex_dir": str(tmp_path), "image_dir": str(tmp_path / "fig_slides"),
-            "stem": "lec-f1", "items": [dict(i) for i in ITEMS]}
+            "stem": "lec-f1", "items": [dict(i) for i in ITEMS],
+            "frame_background": {"color": "bblue!20", "image": ""}}
 
 
 @pytest.fixture
@@ -321,6 +331,33 @@ def test_save_emits_json(editor, capsys):
     editor.save()
     message = json.loads(capsys.readouterr().out.strip())
     assert len(message["items"]) == len(ITEMS)
+    assert message["background"] == {"color": "bblue!20", "image": ""}
+
+
+# ---- frame background --------------------------------------------------------
+
+def test_background_dialog_roundtrip(editor):
+    dialog = beamer_gui.BackgroundDialog(editor, editor.frame_background)
+    assert dialog.color.currentText() == "bblue" and dialog.tint.value() == 20
+    assert dialog.background() == {"color": "bblue!20", "image": ""}
+    dialog.color.setCurrentText("none")
+    dialog.image.setText("fig_slides/g.png")
+    assert dialog.background() == {"color": "", "image": "fig_slides/g.png"}
+
+
+def test_background_image_from_clipboard_and_file(editor, session, tmp_path_factory):
+    from PySide6.QtWidgets import QApplication
+    dialog = beamer_gui.BackgroundDialog(editor, {"color": "", "image": ""})
+    QApplication.clipboard().setImage(solid_image("red"))
+    dialog.paste()
+    assert dialog.image.text() == "fig_slides/lec-f1-1.png"
+    outside = tmp_path_factory.mktemp("elsewhere") / "photo.png"
+    solid_image("blue").save(str(outside))
+    assert editor.import_image(str(outside)) == "fig_slides/lec-f1-2.png"
+    inside = os.path.join(session["tex_dir"], "fig_slides", "g.png")
+    assert editor.import_image(inside) == "fig_slides/g.png"     # not copied
+    editor.set_background_spec(dialog.background())
+    assert editor.frame_background["image"] == "fig_slides/lec-f1-1.png"
 
 
 # ---- snapping ------------------------------------------------------------------

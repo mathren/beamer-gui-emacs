@@ -443,7 +443,8 @@ with a trailing % gui:ID comment, have :legacy t."
               (extra (match-string-no-properties 2))
               (b (match-beginning 0))
               (body-beg (min end (1+ (match-end 0)))))
-          (when (re-search-forward beamer-gui--footer-regexp end t)
+          (when (and (re-search-forward beamer-gui--footer-regexp end t)
+                     (not (member id '("background" "background-end"))))
             (let ((e (match-end 0)))
               (push (append (list :id id :beg b :end e)
                             (beamer-gui--parse-framed
@@ -846,7 +847,14 @@ they come from the beamer export of the subtree at BEG."
         (re-search-forward beamer-gui--document-begin-regexp)
         (list (buffer-substring-no-properties (point-min) (line-beginning-position))
               (or (beamer-gui--body-setup) "")
-              (buffer-substring-no-properties (car frame) (cdr frame)))))))
+              (let ((bg (beamer-gui-frame-background (car frame) (cdr frame))))
+                (concat (beamer-gui--region-text (plist-get bg :open))
+                        (buffer-substring-no-properties (car frame) (cdr frame))
+                        (beamer-gui--region-text (plist-get bg :close)))))))))
+
+(defun beamer-gui--region-text (region)
+  "Return the text of REGION, a (START . END) cons, or \"\"."
+  (if region (buffer-substring-no-properties (car region) (cdr region)) ""))
 
 (defun beamer-gui--inner-region (block)
   "Return (BEG . END) of the content of the textblock in BLOCK.
@@ -943,6 +951,7 @@ frame is not scanned for movable elements."
                                          (funcall fn m)))))
            (measured (beamer-gui--apply-to-string
                       frame model (funcall with-end "@A" #'beamer-gui--measure-insertions)))
+           ;; The background group around the frame is copied as is.
            (background (beamer-gui--apply-to-string
                         frame model
                         (lambda (m) (cons (list body-end body-end "\\bgmarkv{@B}{end}\n")
@@ -1091,6 +1100,61 @@ needed for a spacer: :height :depth :width."
               :before-depth (or (plist-get b :pd) -1000)
               :lw (plist-get b :lw) :tw (plist-get b :tw)
               :hm (plist-get b :hm) :vm (plist-get b :vm))))))
+
+
+;;;; Frame background
+
+(defun beamer-gui--background-text (spec)
+  "Return (OPEN . CLOSE) wrapping a frame in the background SPEC.
+SPEC is a plist: :color, a colour expression such as bblue!10, and
+:image, an image file; empty or nil values are left out.  The frame
+is put in a group setting beamer's background canvas colour or
+background template; nil if SPEC sets nothing."
+  (let ((color (plist-get spec :color)) (image (plist-get spec :image)))
+    (unless (and (string-empty-p (or color "")) (string-empty-p (or image "")))
+      (cons (concat "%%% beamer-gui background\n{%\n"
+                    (if (string-empty-p (or color "")) ""
+                      (format "\\setbeamercolor{background canvas}{bg=%s}%%\n" color))
+                    (if (string-empty-p (or image "")) ""
+                      (format "\\usebackgroundtemplate{\\includegraphics[width=\\paperwidth,height=\\paperheight]{%s}}%%\n"
+                              image))
+                    "%%% ---\n")
+            "\n%%% beamer-gui background-end\n}%\n%%% ---"))))
+
+(defun beamer-gui-frame-background (beg end)
+  "Return the background of the frame from BEG to END, a plist.
+:color and :image are its settings (\"\" if none); :open and :close
+are the (START . END) of the blocks around the frame, or nil."
+  (save-excursion
+    (let (open close (color "") (image ""))
+      (goto-char beg)
+      (skip-chars-backward " \t\n")
+      (when (and (looking-back beamer-gui--footer-regexp (line-beginning-position))
+                 (re-search-backward "^[ \t]*%%% beamer-gui background$"
+                                     (save-excursion (forward-line -6) (point)) t))
+        (setq open (cons (point) beg))
+        (let ((text (buffer-substring-no-properties (car open) (cdr open))))
+          (when (string-match "\\\\setbeamercolor{background canvas}{bg=\\([^}]*\\)}" text)
+            (setq color (match-string 1 text)))
+          (when (string-match "\\\\usebackgroundtemplate{\\\\includegraphics\\[[^]]*\\]{\\([^}]*\\)}}"
+                              text)
+            (setq image (match-string 1 text)))))
+      (goto-char end)
+      (when (looking-at (concat "[ \t\n]*%%% beamer-gui background-end\n"
+                                "\\(?:.*\n\\)\\{0,3\\}?[ \t]*%%% ---"))
+        (setq close (cons end (match-end 0))))
+      (list :color color :image image :open open :close close))))
+
+(defun beamer-gui--frame-background-edits (beg end spec)
+  "Return the edits giving the frame from BEG to END the background SPEC."
+  (let* ((current (beamer-gui-frame-background beg end))
+         (text (beamer-gui--background-text spec))
+         (open (plist-get current :open))
+         (close (plist-get current :close)))
+    (unless (and (equal (plist-get current :color) (or (plist-get spec :color) ""))
+                 (equal (plist-get current :image) (or (plist-get spec :image) "")))
+      (list (list (or (car open) beg) (or (cdr open) beg) (or (car text) ""))
+            (list (or (car close) end) (or (cdr close) end) (or (cdr text) ""))))))
 
 
 ;;;; Frames
@@ -1374,14 +1438,15 @@ FRAMED, the block gets the comment lines, with a new id from USED."
              (lambda (indent)
                (concat indent new (buffer-substring-no-properties head-end end)))))))))
 
-(defun beamer-gui-apply-items (beg end items &optional measurements)
+(defun beamer-gui-apply-items (beg end items &optional measurements background)
   "Make the frame from BEG to END match ITEMS, as returned by the GUI.
 Drawn elements (image, arrow, ellipse, rect, text) are added,
 rewritten when changed, and deleted when missing from ITEMS.
 Moved elements of the text are wrapped; moved textblocks keep their
 units.  MEASUREMENTS, from the last compilation, give the sizes of
-spacers and the length units.  Unchanged code is left as it is.
-The whole edit is a single undo step."
+spacers and the length units.  BACKGROUND, if non-nil, is the
+background plist of `beamer-gui-frame-background' to set.  Unchanged
+code is left as it is.  The whole edit is a single undo step."
   (let* ((model (beamer-gui-frame-model beg end (beamer-gui--org-p)))
          (blocks (plist-get model :blocks))
          (by-id (lambda (id list) (cl-find id list :key (lambda (x) (plist-get x :id))
@@ -1449,6 +1514,8 @@ The whole edit is a single undo step."
                              (beamer-gui--textblock-edits
                               (car r) (cdr r) item (funcall units-for id) used t))))
                    edits)))))))
+    (when background
+      (setq edits (append (beamer-gui--frame-background-edits beg end background) edits)))
     (when new
       (let ((at (beamer-gui--insertion-point beg end)))
         (push (list at at (mapconcat (lambda (i) (concat (beamer-gui-item-to-tex i) "\n"))
@@ -1670,6 +1737,9 @@ ON-FAIL with the log file name if non-nil, else report the log."
              :stem (format "%s-f%d" (file-name-base buffer-file-name)
                            (beamer-gui-frame-ordinal beg))
              :graphics_path (vconcat (beamer-gui-graphics-path))
+             :frame_background (let ((bg (beamer-gui-frame-background beg end)))
+                                 (list :color (plist-get bg :color)
+                                       :image (plist-get bg :image)))
              :items (vconcat (beamer-gui-gui-items model measurements)))))))
 
 (defun beamer-gui--compile-session (session callback)
@@ -1704,13 +1774,18 @@ Call CALLBACK with the name of the GUI input file."
     (when (process-live-p process)
       (process-send-string process (concat (json-serialize message) "\n")))))
 
-(defun beamer-gui--save-items (session items)
-  "Write ITEMS from the GUI into the frame of SESSION and recompile."
+(defun beamer-gui--save-items (session items &optional background)
+  "Write ITEMS and BACKGROUND from the GUI into SESSION's frame; recompile."
   (with-current-buffer (beamer-gui--session-buffer session)
     (let ((beg (beamer-gui--session-beg session))
           (end (beamer-gui--session-end session)))
       (beamer-gui-apply-items (marker-position beg) (marker-position end) items
-                              (beamer-gui--session-measurements session))
+                              (beamer-gui--session-measurements session) background)
+      ;; A background block may have been inserted before the frame.
+      (save-excursion
+        (goto-char beg)
+        (re-search-forward beamer-gui--frame-begin-regexp)
+        (set-marker beg (match-beginning 0)))
       (set-marker end (cdr (beamer-gui-frame-bounds beg)))))
   (beamer-gui--compile-session
    session (lambda (file) (beamer-gui--send session (list :session file)))))
@@ -1724,12 +1799,12 @@ Call CALLBACK with the name of the GUI input file."
         (let ((line (substring pending 0 (match-beginning 0))))
           (setq pending (substring pending (match-end 0)))
           (when (string-prefix-p "{" line)
-            (let ((items (plist-get (json-parse-string line :object-type 'plist
-                                                       :array-type 'list
-                                                       :null-object nil)
-                                    :items)))
+            (let* ((message (json-parse-string line :object-type 'plist
+                                               :array-type 'list :null-object nil))
+                   (items (plist-get message :items)))
               (when (listp items)
-                (beamer-gui--save-items session items)))))))))
+                (beamer-gui--save-items session items
+                                        (plist-get message :background))))))))))
 
 (defun beamer-gui--start-gui (session file)
   "Start the GUI process of SESSION on the GUI input FILE."

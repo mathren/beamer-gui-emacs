@@ -286,11 +286,11 @@ Skip the test if pdflatex is missing; fail if compilation fails."
 
 ;;;; Applying the GUI's changes
 
-(defun bgt-apply (items &optional measurements)
-  "Apply ITEMS to the first frame of the current buffer."
+(defun bgt-apply (items &optional measurements background)
+  "Apply ITEMS and BACKGROUND to the first frame of the current buffer."
   (goto-char (point-min))
   (let ((b (bgt-frame-at "Hello")))
-    (beamer-gui-apply-items (car b) (cdr b) items measurements)))
+    (beamer-gui-apply-items (car b) (cdr b) items measurements background)))
 
 (defun bgt-gui-items ()
   "Return the drawn blocks of the first frame as the GUI sends them."
@@ -411,6 +411,69 @@ Skip the test if pdflatex is missing; fail if compilation fails."
                      "  \\begin{textblock}{0.2}[0,0](1.75,1.25)\n"
                      "    tb\n  \\end{textblock}\n  %%% ---")
              nil t))))
+
+
+;;;; Frame background
+
+(ert-deftest bgt-background-text ()
+  (should-not (beamer-gui--background-text '(:color "" :image "")))
+  (should (equal (beamer-gui--background-text '(:color "bblue!10"))
+                 (cons (concat "%%% beamer-gui background\n{%\n"
+                               "\\setbeamercolor{background canvas}{bg=bblue!10}%\n%%% ---\n")
+                       "\n%%% beamer-gui background-end\n}%\n%%% ---")))
+  (should (string-match-p
+           "\\\\usebackgroundtemplate{\\\\includegraphics\\[width=\\\\paperwidth,height=\\\\paperheight\\]{bg.png}}"
+           (car (beamer-gui--background-text '(:image "bg.png"))))))
+
+(ert-deftest bgt-background-set-replace-remove ()
+  (bgt-with bgt-frame
+    (let ((items (bgt-gui-items)))
+      (bgt-apply items nil '(:color "red" :image ""))
+      (goto-char (point-min))
+      (should (search-forward "%%% beamer-gui background\n{%\n\\setbeamercolor{background canvas}{bg=red}%\n%%% ---\n\\begin{frame}[fragile]{First slide}" nil t))
+      (should (search-forward "\\end{frame}\n%%% beamer-gui background-end\n}%\n%%% ---\n\\begin{frame}[t]" nil t))
+      (goto-char (point-min))
+      (let ((b (bgt-frame-at "Hello")))
+        (should (equal (seq-take (beamer-gui-frame-background (car b) (cdr b)) 4)
+                       '(:color "red" :image ""))))
+      ;; Replacing keeps a single pair of blocks.
+      (bgt-apply items nil '(:color "" :image "fig_slides/bg.png"))
+      (should (= 1 (how-many "beamer-gui background$" (point-min) (point-max))))
+      (should (= 1 (how-many "beamer-gui background-end" (point-min) (point-max))))
+      (should-not (string-match-p "background canvas" (buffer-string)))
+      (goto-char (point-min))
+      (let ((b (bgt-frame-at "Hello")))
+        (should (equal (plist-get (beamer-gui-frame-background (car b) (cdr b)) :image)
+                       "fig_slides/bg.png")))
+      ;; Removing restores the document.
+      (bgt-apply items nil '(:color "" :image ""))
+      (should (equal (buffer-string) bgt-frame)))))
+
+(ert-deftest bgt-background-not-an-element ()
+  (bgt-with bgt-frame
+    (bgt-apply (bgt-gui-items) nil '(:color "red"))
+    (goto-char (point-min))
+    (should (equal (bgt-ids (plist-get (bgt-model) :blocks)) '("img1" "arrow1")))))
+
+(ert-deftest bgt-background-compiled ()
+  "The background page of the measuring document has the frame's background."
+  (unless (executable-find "python3") (ert-skip "python3 missing"))
+  (bgt-with (string-replace "\\begin{document}"
+                            (concat beamer-gui-preamble "\\begin{document}")
+                            (replace-regexp-in-string "fig_slides/[ab].png" "example-image"
+                                                      bgt-frame))
+    (bgt-apply (bgt-gui-items) nil '(:color "red"))
+    (goto-char (point-min))
+    (pcase-let* ((`(,pre ,setup ,frame) (beamer-gui--frame-parts (car (bgt-frame-at "Hello"))))
+                 (`(,pdf . ,out) (bgt-compile (beamer-gui-measure-document pre setup frame nil)))
+                 (m (beamer-gui-measurements (expand-file-name "frame.bgpos" out))))
+      (with-temp-buffer
+        (unless (eq 0 (call-process
+                       "python3" nil t nil "-W" "ignore" "-c"
+                       "import pymupdf,sys;p=pymupdf.open(sys.argv[1])[int(sys.argv[2])];print(*p.get_pixmap(dpi=20).pixel(2,60))"
+                       pdf (number-to-string (plist-get m :page-b))))
+          (ert-skip "PyMuPDF missing"))
+        (should (equal (split-string (buffer-string)) '("255" "0" "0")))))))
 
 
 ;;;; Preamble, labels, mode

@@ -23,11 +23,12 @@ import pymupdf
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSocketNotifier, Qt
 from PySide6.QtGui import (QAction, QBrush, QColor, QIcon, QImage, QKeySequence,
                            QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
-from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QDoubleSpinBox,
-                               QFormLayout, QGraphicsItem, QGraphicsPathItem,
-                               QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene,
-                               QGraphicsView, QInputDialog, QMainWindow, QToolBar,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox,
+                               QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
+                               QGraphicsItem, QGraphicsPathItem, QGraphicsPixmapItem,
+                               QGraphicsRectItem, QGraphicsScene, QGraphicsView,
+                               QHBoxLayout, QInputDialog, QLineEdit, QMainWindow,
+                               QPushButton, QSpinBox, QToolBar, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import beamer_gui_core as core  # noqa: E402
@@ -654,6 +655,70 @@ class StylePanel(QDockWidget):
             self.editor.last_style[item.kind] = dict(keep)
 
 
+# ---- frame background -------------------------------------------------------
+
+def color_icon(color):
+    pm = QPixmap(14, 14)
+    pm.fill(color)
+    return QIcon(pm)
+
+
+class BackgroundDialog(QDialog):
+    """Choose the frame's background colour (with a tint) and image.
+
+    The image covers the page; a colour shows where the image is
+    transparent, or alone."""
+
+    def __init__(self, editor, background):
+        super().__init__(editor)
+        self.editor = editor
+        self.setWindowTitle("Frame background")
+        name, tint = core.split_tint(background.get("color", ""))
+        self.color = QComboBox()
+        self.color.addItem("none")
+        for n, c in editor.colors.items():
+            self.color.addItem(color_icon(c), n)
+        self.color.setCurrentText(name or "none")
+        self.tint = QSpinBox()
+        self.tint.setRange(5, 100)
+        self.tint.setSingleStep(5)
+        self.tint.setSuffix(" %")
+        self.tint.setValue(tint)
+        self.image = QLineEdit(background.get("image", ""))
+        self.image.setReadOnly(True)
+        buttons = QHBoxLayout()
+        for label, slot in [("Choose...", self.choose), ("Paste", self.paste),
+                            ("Clear", self.image.clear)]:
+            button = QPushButton(label)
+            button.clicked.connect(slot)
+            buttons.addWidget(button)
+        form = QFormLayout(self)
+        form.addRow("Colour", self.color)
+        form.addRow("Tint", self.tint)
+        form.addRow("Image", self.image)
+        form.addRow("", buttons)
+        ok = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        ok.accepted.connect(self.accept)
+        ok.rejected.connect(self.reject)
+        form.addRow(ok)
+
+    def choose(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Background image", self.editor.tex_dir,
+                                              "Images (*.png *.jpg *.jpeg *.pdf)")
+        if path:
+            self.image.setText(self.editor.import_image(path))
+
+    def paste(self):
+        rel = self.editor.clipboard_image()
+        if rel:
+            self.image.setText(rel)
+
+    def background(self):
+        name = self.color.currentText()
+        return {"color": core.join_tint("" if name == "none" else name, self.tint.value()),
+                "image": self.image.text()}
+
+
 # ---- editor window --------------------------------------------------------
 
 class Editor(QMainWindow):
@@ -700,6 +765,8 @@ class Editor(QMainWindow):
         self.image_dir = session["image_dir"]
         self.graphics_path = session.get("graphics_path", [])
         self.stem = core.safe_stem(session["stem"])
+        self.frame_background = dict(session.get("frame_background")
+                                     or {"color": "", "image": ""})
         self.setWindowTitle(f"beamer-gui: {session['stem']}")
         pdf = session["background"]
         page_b = session.get("page_b", -1)
@@ -798,6 +865,7 @@ class Editor(QMainWindow):
                                 ("Rectangle", "R", self.add_rect),
                                 ("Text", "T", self.add_text),
                                 ("Paste image", QKeySequence.Paste, self.paste),
+                                ("Background...", "B", self.edit_background),
                                 ("Snap", "S", None),
                                 ("Delete", QKeySequence.Delete, self.delete),
                                 ("Save", QKeySequence.Save, self.save),
@@ -846,31 +914,59 @@ class Editor(QMainWindow):
     def add_text(self):
         self.add_new(TextItem, x=.3, y=.3, w=.3, text="Text")
 
-    def paste(self):
-        """Add the clipboard image, saved in the image directory.
+    def import_image(self, path):
+        """Return the name of image PATH for LaTeX, copying it if needed.
+
+        Files outside the directory of the LaTeX source are copied to
+        the image directory."""
+        tex_dir = os.path.realpath(self.tex_dir)
+        if os.path.realpath(path).startswith(tex_dir + os.sep):
+            return core.rel_to_tex(path, self.tex_dir)
+        os.makedirs(self.image_dir, exist_ok=True)
+        dest = core.unique_image_path(self.image_dir, self.stem,
+                                      os.path.splitext(path)[1].lower())
+        shutil.copy(path, dest)
+        return core.rel_to_tex(dest, self.tex_dir)
+
+    def clipboard_image(self):
+        """Save the clipboard image in the image directory; return its name.
 
         A copied image file is copied as is (PDFs stay vector); a
-        bitmap is saved as PNG."""
-        os.makedirs(self.image_dir, exist_ok=True)
+        bitmap is saved as PNG.  Return None if there is no image."""
         clipboard = QApplication.clipboard()
         mime = clipboard.mimeData()
-        dest = None
         files = [u.toLocalFile() for u in mime.urls()] if mime.hasUrls() else []
         source = next((f for f in files if core.is_image_file(f)), None)
         if source:
             ext = os.path.splitext(source)[1].lower()
+            os.makedirs(self.image_dir, exist_ok=True)
             dest = core.unique_image_path(self.image_dir, self.stem, ext)
             shutil.copy(source, dest)
         elif mime.hasImage():
+            os.makedirs(self.image_dir, exist_ok=True)
             dest = core.unique_image_path(self.image_dir, self.stem)
             clipboard.image().save(dest, "PNG")
-        if dest is None:
+        else:
             self.statusBar().showMessage("Clipboard has no image")
-            return
-        self.add(ImageItem(self, {"id": core.new_id("img", self.ids()),
-                                  "file": core.rel_to_tex(dest, self.tex_dir),
-                                  "x": .3, "y": .3, "w": .3}))
-        self.statusBar().showMessage(f"Saved {dest}")
+            return None
+        return core.rel_to_tex(dest, self.tex_dir)
+
+    def paste(self):
+        """Add the clipboard image as a new image element."""
+        rel = self.clipboard_image()
+        if rel:
+            self.add(ImageItem(self, {"id": core.new_id("img", self.ids()),
+                                      "file": rel, "x": .3, "y": .3, "w": .3}))
+            self.statusBar().showMessage(f"Saved {rel}")
+
+    def edit_background(self):
+        dialog = BackgroundDialog(self, self.frame_background)
+        if dialog.exec():
+            self.set_background_spec(dialog.background())
+
+    def set_background_spec(self, background):
+        self.frame_background = background
+        self.statusBar().showMessage("The background is applied when you save (Ctrl+S)")
 
     def delete(self):
         for element in [e for e in self.elements if e.isSelected()]:
@@ -887,7 +983,8 @@ class Editor(QMainWindow):
         return [e.to_dict() for e in self.elements]
 
     def save(self):
-        sys.stdout.write(json.dumps({"items": self.items_dicts()}) + "\n")
+        sys.stdout.write(json.dumps({"items": self.items_dicts(),
+                                     "background": self.frame_background}) + "\n")
         sys.stdout.flush()
         self.statusBar().showMessage("Saved; recompiling...")
 

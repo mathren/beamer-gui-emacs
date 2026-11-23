@@ -41,6 +41,10 @@ emacs -Q -l quicktry.el path/to/beamer_source.tex
    - while dragging, edges and centres snap to those of the other
      elements and of the page, with a guide line; =S= toggles
      snapping;
+   - =B= (Background...) sets the frame's background: a colour of the
+     palette with a tint, and/or an image from a file or the clipboard
+     (copied to =fig_slides/= if it is elsewhere), stretched to the
+     page;
    - =Del= deletes a shape, =C-s= writes the changes into the buffer
      and recompiles the frame.
 
@@ -74,6 +78,22 @@ slide in place:
   \end{block}
 \end{textblock*}
 \beamerguivspace{30.45pt}{0pt}{3pt}
+%%% ---
+#+end_src
+
+A frame background is a group around the frame:
+
+#+begin_src latex
+%%% beamer-gui background
+{%
+\setbeamercolor{background canvas}{bg=bblue!15}%
+\usebackgroundtemplate{\includegraphics[width=\paperwidth,height=\paperheight]{fig_slides/bg.png}}%
+%%% ---
+\begin{frame}{...}
+  ...
+\end{frame}
+%%% beamer-gui background-end
+}%
 %%% ---
 #+end_src
 
