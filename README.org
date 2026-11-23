@@ -155,7 +155,7 @@ example =C-c g=:
 #+end_src
 
 * TODO list of features and fixes
-- [ ] safeguard for non beamer files, gracious fail
-- [ ] make existing elements editable (list from =(LaTeX-environment
+- [X] safeguard for non beamer files, gracious fail
+- [X] make existing elements editable (list from =(LaTeX-environment
   ARG)=, or use example from real talk)
-- [ ] styles for arrows, circles (maybe with tikz or gimp, or inkscape as external tools?)
+- [X] styles for arrows, circles (maybe with tikz or gimp, or inkscape as external tools?)

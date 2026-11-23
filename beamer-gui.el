@@ -95,6 +95,13 @@ is looked up in the variable `exec-path'; a file name is used as is."
 The output directory option and the file name are appended."
   :type '(repeat string))
 
+(defcustom beamer-gui-image-editors
+  '(("svg" . "inkscape") ("pdf" . "inkscape") ("eps" . "inkscape")
+    ("png" . "gimp") ("jpg" . "gimp") ("jpeg" . "gimp"))
+  "Programs the GUI opens images with, by file extension.
+Saving an image in its program recompiles the frame."
+  :type '(alist :key-type string :value-type string))
+
 (defcustom beamer-gui-body-setup-regexp
   "^[ \t]*\\\\\\(?:graphicspath\\|tikzset\\|tikzstyle\\|setbeamer[a-z]+\\){"
   "Regexp for setup commands copied into single-frame documents.
@@ -127,11 +134,17 @@ block.  Any environment in a frame that is not in
 those AUCTeX offers in a beamer frame."
   :type '(repeat string))
 
-(defcustom beamer-gui-movable-macros '("includegraphics")
+(defcustom beamer-gui-movable-macros '("includegraphics" ("movie" . 2))
   "Macros movable like an image.
-Each takes optional <overlay> and [options] arguments and one
-mandatory argument."
-  :type '(repeat string))
+Each entry is a macro name, taking one mandatory argument, or (NAME
+. N) for a macro taking N.  Optional <overlay> and [options]
+arguments may come first.  Macros the preamble defines that draw a
+picture (with \\includegraphics, \\movie or TikZ) are added
+automatically."
+  :type '(repeat (choice string (cons string integer))))
+
+(defvar beamer-gui--document-definitions nil
+  "Definitions of the document being edited, see `beamer-gui-document-definitions'.")
 
 
 ;;;; Constants
@@ -557,10 +570,65 @@ ITEM has :kind image, arrow, ellipse, rect, text or raw."
   "Regexp for the first line of a textblock.
 Groups: 1 environment, 2 width, 3 x, 4 y.")
 
+(defun beamer-gui-document-definitions (texts)
+  "Return what the preamble TEXTS define that beamer-gui can use.
+A plist: :macros, an alist from macro names that draw a picture to
+\\(MANDATORY-ARGUMENTS . WIDTH-DEFAULT); and :environments, an alist
+from environment names to WIDTH-DEFAULT.  WIDTH-DEFAULT is the
+default of an optional first argument that is a length, else nil:
+such an argument sets the width, and resizing changes it."
+  (let (macros environments)
+    (with-temp-buffer
+      (dolist (text texts)
+        (insert text "\n"))
+      (with-syntax-table beamer-gui--paren-syntax-table
+        (goto-char (point-min))
+        (while (re-search-forward
+                (concat "\\\\\\(?:re\\|provide\\)?\\(newcommand\\|newenvironment\\)\\*?"
+                        "\\(?:<>\\)?[ \t]*{?\\\\?\\([a-zA-Z@*]+\\)}?"
+                        "[ \t]*\\(?:\\[\\([0-9]\\)\\]\\)?[ \t]*")
+                nil t)
+          (let* ((kind (match-string 1)) (name (match-string 2))
+                 (n (if (match-beginning 3) (string-to-number (match-string 3)) 0))
+                 (default (when (eq (char-after) ?\[)
+                            (let ((start (point)))
+                              (ignore-errors (beamer-gui--skip-group))
+                              (buffer-substring (1+ start) (max (1+ start) (1- (point)))))))
+                 (width (and default (beamer-gui--parse-length default) default)))
+            (skip-chars-forward " \t\n")
+            (when (eq (char-after) ?{)
+              (let ((start (point)))
+                (when (ignore-errors (beamer-gui--skip-group) t)
+                  (cond
+                   ((equal kind "newenvironment")
+                    (when width (push (cons name width) environments)))
+                   ;; A picture, but not a TikZ annotation of other text
+                   ;; (\\tikzmark, arrows between marks) or of a word in a
+                   ;; line (baseline=, as in a strike-out).
+                   ((let ((body (buffer-substring start (point))))
+                      (and (string-match-p
+                            "\\\\includegraphics\\|\\\\movie\\b\\|tikzpicture\\|\\\\tikz\\b" body)
+                           (not (string-match-p "remember picture\\|overlay\\|baseline" body))))
+                    (push (cons name (cons (- n (if default 1 0)) width)) macros))))))))))
+    (list :macros (nreverse macros) :environments (nreverse environments))))
+
+(defun beamer-gui--macro-arguments (name)
+  "Return how many mandatory arguments the movable macro NAME takes, or nil."
+  (or (cl-some (lambda (entry)
+                 (cond ((equal entry name) 1)
+                       ((and (consp entry) (equal (car entry) name)) (cdr entry))))
+               beamer-gui-movable-macros)
+      (cadr (assoc name (plist-get beamer-gui--document-definitions :macros)))))
+
+(defun beamer-gui--width-default (name)
+  "Return the default of the width argument of macro or environment NAME, or nil."
+  (or (cddr (assoc name (plist-get beamer-gui--document-definitions :macros)))
+      (cdr (assoc name (plist-get beamer-gui--document-definitions :environments)))))
+
 (defun beamer-gui--inline-name-p (name)
   "Return non-nil if the element NAME is set inside a line."
   (or (member name beamer-gui-inline-environments)
-      (member name beamer-gui-movable-macros)))
+      (beamer-gui--macro-arguments name)))
 
 (defun beamer-gui--env-end (name)
   "Move after the \\end{NAME} matching the \\begin{NAME} before point.
@@ -618,7 +686,7 @@ or \"textblock\", :name (environment or macro), :beg, :end, and
               (unless (beamer-gui--escaped-p start)
                 (forward-line 1)))
              (macro
-              (when (member macro beamer-gui-movable-macros)
+              (when-let ((arguments (beamer-gui--macro-arguments macro)))
                 ;; Arguments with unbalanced brackets (code being typed)
                 ;; make the macro not movable rather than fail.
                 (let ((after (point)))
@@ -626,12 +694,14 @@ or \"textblock\", :name (environment or macro), :beg, :end, and
                       (progn
                         (when (eq (char-after) ?*) (forward-char))
                         (beamer-gui--skip-overlay)
-                        (beamer-gui--skip-group)
-                        (skip-chars-forward " \t")
-                        (when (eq (char-after) ?{)
-                          (beamer-gui--skip-group)
-                          (add (list :kind "flow" :name macro :beg start :end (point)
-                                     :inline t))))
+                        (when (eq (char-after) ?\[) (beamer-gui--skip-group))
+                        (if (cl-loop repeat arguments
+                                     always (progn (skip-chars-forward " \t")
+                                                   (and (eq (char-after) ?{)
+                                                        (beamer-gui--skip-group))))
+                            (add (list :kind "flow" :name macro :beg start :end (point)
+                                       :inline t))
+                          (goto-char after)))
                     (scan-error (goto-char after))))))
              ((member env beamer-gui-container-environments))
              ((member env beamer-gui-ignored-environments)
@@ -727,7 +797,19 @@ width, used when the code has no size option."
     (insert code)
     (goto-char (point-min))
     (cond
-     ((member name beamer-gui-movable-macros)
+     ((beamer-gui--width-default name)
+      ;; The optional first argument is the width: scale it, or add it.
+      (re-search-forward (concat "\\\\\\(?:begin{\\)?" (regexp-quote name) "}?"))
+      (beamer-gui--skip-overlay)
+      (if (eq (char-after) ?\[)
+          (let ((open (point)))
+            (beamer-gui--skip-group)
+            (let ((value (buffer-substring (1+ open) (1- (point)))))
+              (delete-region open (point))
+              (insert "[" (beamer-gui--scale-length value factor) "]")))
+        (insert "[" (beamer-gui--scale-length (beamer-gui--width-default name) factor) "]"))
+      (buffer-string))
+     ((equal name "includegraphics")
       (re-search-forward (concat "\\\\" (regexp-quote name) "\\*?"))
       (beamer-gui--skip-overlay)
       (if (eq (char-after) ?\[)
@@ -1225,7 +1307,9 @@ POS defaults to point.  In Org buffers the frame is the current subtree."
   "Return how the GUI may resize element NAME, INLINE or not.
 \"aspect\" keeps the aspect ratio, \"width\" changes the width only,
 \"none\" forbids resizing."
-  (cond ((member name beamer-gui-movable-macros) "aspect")
+  (cond ((equal name "includegraphics") "aspect")
+        ((beamer-gui--width-default name) "width")
+        ((beamer-gui--macro-arguments name) "none")
         ((member name '("tcolorbox" "minipage")) "width")
         (inline "none")
         (t "width")))
@@ -1236,6 +1320,12 @@ POS defaults to point.  In Org buffers the frame is the current subtree."
     (when (or (plist-get marks :i)
               (and (plist-get marks :b) (plist-get marks :e)))
       (beamer-gui-element-box marks (plist-get measurements :paper)))))
+
+(defun beamer-gui--graphics-file (code)
+  "Return the file of the first \\includegraphics in CODE, or nil."
+  (when (string-match "\\\\includegraphics\\*?\\(?:<[^>]*>\\)?\\(?:\\[[^]]*\\]\\)?[ \t]*{\\([^}]+\\)}"
+                      code)
+    (match-string 1 code)))
 
 (defun beamer-gui-gui-items (model measurements)
   "Return the elements of MODEL for the GUI, with their MEASUREMENTS.
@@ -1257,6 +1347,10 @@ of the frame) are left out."
           ("wrap"
            (when box
              (push (list :kind "wrap" :id id :name (plist-get b :moved)
+                         :file (or (beamer-gui--graphics-file
+                                    (buffer-substring-no-properties
+                                     (plist-get b :code-beg) (plist-get b :code-end)))
+                                   "")
                          :box (vconcat box)
                          :resize (beamer-gui--resize-mode (plist-get b :moved)
                                                           (plist-get b :inline)))
@@ -1270,6 +1364,10 @@ of the frame) are left out."
       (when-let ((box (plist-get (beamer-gui--measured (plist-get e :id) measurements) :box)))
         (push (list :kind (plist-get e :kind) :id (plist-get e :id)
                     :name (plist-get e :name) :box (vconcat box)
+                    :file (or (beamer-gui--graphics-file
+                               (buffer-substring-no-properties (plist-get e :beg)
+                                                               (plist-get e :end)))
+                              "")
                     :resize (if (equal (plist-get e :kind) "textblock") "width"
                               (beamer-gui--resize-mode (plist-get e :name)
                                                        (plist-get e :inline))))
@@ -1834,9 +1932,11 @@ is not a plain word).  Return the position."
   (let ((buffer (beamer-gui--session-buffer session)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (let ((pos (beamer-gui-goto-click (marker-position (beamer-gui--session-beg session))
-                                          (marker-position (beamer-gui--session-end session))
-                                          click)))
+        (let ((pos (let ((beamer-gui--document-definitions
+                          (beamer-gui--session-definitions session)))
+                     (beamer-gui-goto-click (marker-position (beamer-gui--session-beg session))
+                                            (marker-position (beamer-gui--session-end session))
+                                            click))))
           (let ((window (display-buffer buffer)))
             (when window
               (set-window-point window pos)
@@ -1870,7 +1970,7 @@ ON-FAIL with the log file name if non-nil, else report the log."
            (let ((log (expand-file-name "frame.log" tmpdir)))
              (if on-fail
                  (funcall on-fail log)
-               (message "beamer-gui: LaTeX failed, see %s" log)))))))))
+               (beamer-gui--report-latex-failure log)))))))))
 
 
 ;;;; Editing session
@@ -1879,7 +1979,7 @@ ON-FAIL with the log file name if non-nil, else report the log."
                (:constructor beamer-gui--session-create)
                (:copier nil))
   "State of one frame being edited."
-  buffer beg end tmpdir process measurements)
+  buffer beg end tmpdir process measurements definitions)
 
 (defvar-local beamer-gui--current-session nil
   "The `beamer-gui--session' of this buffer, if any.")
@@ -1915,6 +2015,8 @@ ON-FAIL with the log file name if non-nil, else report the log."
              :stem (format "%s-f%d" (file-name-base buffer-file-name)
                            (beamer-gui-frame-ordinal beg))
              :graphics_path (vconcat (beamer-gui-graphics-path))
+             :image_editors (vconcat (mapcar (lambda (e) (list :ext (car e) :command (cdr e)))
+                                             beamer-gui-image-editors))
              :frame_background (let ((bg (beamer-gui-frame-background beg end)))
                                  (list :color (plist-get bg :color)
                                        :image (plist-get bg :image)))
@@ -1933,18 +2035,24 @@ Call CALLBACK with the name of the GUI input file."
       (unless (eql version beamer-gui--preamble-version)
         (user-error "Run M-x beamer-gui-insert-preamble to %s the beamer-gui preamble"
                     (if version "update" "add")))
+      (setf (beamer-gui--session-definitions session)
+            (beamer-gui-document-definitions (beamer-gui--preamble-sources preamble dir)))
       (beamer-gui--compile
-       (beamer-gui-measure-document preamble setup frame
-                                    (beamer-gui-document-colors preamble dir)
-                                    (beamer-gui--org-p))
+       (let ((beamer-gui--document-definitions (beamer-gui--session-definitions session)))
+         (beamer-gui-measure-document preamble setup frame
+                                      (beamer-gui-document-colors preamble dir)
+                                      (beamer-gui--org-p)))
        dir tmpdir
        (lambda (pdf)
          (setf (beamer-gui--session-measurements session)
                (beamer-gui-measurements (expand-file-name "frame.bgpos" tmpdir)))
          (let ((file (expand-file-name "session.json" tmpdir))
-               (json (beamer-gui--session-json session pdf)))
+               (json (let ((beamer-gui--document-definitions
+                            (beamer-gui--session-definitions session)))
+                       (beamer-gui--session-json session pdf))))
            (with-temp-file file (insert json))
-           (funcall callback file)))))))
+           (funcall callback file)))
+       (lambda (log) (beamer-gui--report-latex-failure log session))))))
 
 (defun beamer-gui--send (session message)
   "Send MESSAGE, a plist, to the GUI of SESSION as a JSON line."
@@ -1957,8 +2065,9 @@ Call CALLBACK with the name of the GUI input file."
   (with-current-buffer (beamer-gui--session-buffer session)
     (let ((beg (beamer-gui--session-beg session))
           (end (beamer-gui--session-end session)))
-      (beamer-gui-apply-items (marker-position beg) (marker-position end) items
-                              (beamer-gui--session-measurements session) background)
+      (let ((beamer-gui--document-definitions (beamer-gui--session-definitions session)))
+        (beamer-gui-apply-items (marker-position beg) (marker-position end) items
+                                (beamer-gui--session-measurements session) background))
       ;; A background block may have been inserted before the frame.
       (save-excursion
         (goto-char beg)
@@ -1996,16 +2105,85 @@ Call CALLBACK with the name of the GUI input file."
          :command (list beamer-gui-python beamer-gui-script file)
          :connection-type 'pipe
          :stderr (get-buffer-create "*beamer-gui-errors*")
+         :sentinel #'beamer-gui--gui-sentinel
          :filter (beamer-gui--filter session))))
+
+(defun beamer-gui--document-class ()
+  "Return the document class of the buffer, or nil if it has none."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward
+           "^[^%\n]*\\\\documentclass\\(?:\\[[^]]*\\]\\)?[ \t\n]*{\\([^}]+\\)}" nil t)
+      (match-string-no-properties 1))))
+
+(defun beamer-gui--check-environment ()
+  "Signal a `user-error' if the frame at point cannot be edited.
+Check the buffer is a beamer document with point in a frame, and
+that LaTeX, Python and the GUI script are there.  Return the frame
+bounds."
+  (unless buffer-file-name
+    (user-error "The buffer must visit a file"))
+  (unless (beamer-gui--org-p)
+    (let ((class (beamer-gui--document-class)))
+      (cond
+       ((not class)
+        (user-error "No \\documentclass in this file; %s"
+                    "the frame and the preamble must be in the same file"))
+       ((not (string-match-p "beamer" class))
+        (unless (y-or-n-p (format "Class `%s' is not beamer; continue? " class))
+          (user-error "Not a beamer document"))))))
+  (let ((latex (car beamer-gui-latex-command)))
+    (unless (executable-find latex)
+      (user-error "LaTeX `%s' not found; see `beamer-gui-latex-command'" latex)))
+  (unless (or (file-executable-p beamer-gui-python) (executable-find beamer-gui-python))
+    (user-error "Python `%s' not found; see `beamer-gui-python'" beamer-gui-python))
+  (unless (file-readable-p beamer-gui-script)
+    (user-error "GUI script `%s' not found; see `beamer-gui-script'"
+                beamer-gui-script))
+  (or (beamer-gui-frame-bounds)
+      (user-error "Point is not inside \\begin{frame}...\\end{frame}")))
+
+(defun beamer-gui--latex-error (log)
+  "Return the first error message of the LaTeX LOG file, or nil."
+  (when (file-readable-p log)
+    (with-temp-buffer
+      (insert-file-contents log)
+      (goto-char (point-min))
+      (when (re-search-forward "^! \\(.*\\)$" nil t)
+        (let ((message (match-string 1)))
+          (if (re-search-forward "^l\\.[0-9]+ \\(.*\\)$" (line-end-position 4) t)
+              (format "%s (at: %s)" message (string-trim (match-string 1)))
+            message))))))
+
+(defun beamer-gui--report-latex-failure (log &optional session)
+  "Report that LaTeX failed, with the first error of LOG.
+The GUI of SESSION, if running, shows it too."
+  (let ((text (format "beamer-gui: LaTeX failed: %s; log: %s"
+                      (or (beamer-gui--latex-error log) "see the log") log)))
+    (message "%s" text)
+    (when session
+      (beamer-gui--send session (list :error text)))))
+
+(defun beamer-gui--gui-sentinel (process _event)
+  "Report the GUI PROCESS stopping with an error."
+  (when (and (memq (process-status process) '(exit signal))
+             (not (zerop (process-exit-status process))))
+    (let ((errors (get-buffer "*beamer-gui-errors*")))
+      (message "beamer-gui: the editor stopped: %s"
+               (or (and errors
+                        (with-current-buffer errors
+                          (goto-char (point-max))
+                          (when (re-search-backward
+                                 "^\\(?:[A-Za-z.]*Error\\|ModuleNotFoundError\\)[^\n]*" nil t)
+                            (match-string 0))))
+                   "see *beamer-gui-errors*")))))
 
 ;;;###autoload
 (defun beamer-gui-edit-frame ()
   "Edit the elements of the frame at point in the GUI.
 Saving in the GUI rewrites the changed elements in this buffer."
   (interactive)
-  (unless buffer-file-name
-    (user-error "Buffer must visit a file"))
-  (let ((bounds (or (beamer-gui-frame-bounds) (user-error "Not in a frame"))))
+  (let ((bounds (beamer-gui--check-environment)))
     (when-let ((old beamer-gui--current-session))
       (when (process-live-p (beamer-gui--session-process old))
         (delete-process (beamer-gui--session-process old))))

@@ -114,10 +114,14 @@ WIDTHS = {"ultra thin": 0.1, "very thin": 0.2, "thin": 0.4, "semithick": 0.6,
           "thick": 0.8, "very thick": 1.2, "ultra thick": 1.6}
 DASHES = ("solid", "dashed", "dotted", "densely dashed", "densely dotted",
           "loosely dashed", "loosely dotted", "dash dot")
-TIPS = ("->", "<-", "<->", "-")
+TIPS = ("->", "<-", "<->", "-", "-latex", "latex-latex", "-stealth", "stealth-stealth",
+        "|->", "|-|")
 BASE_LINE_WIDTH = 2.0   # pt, from the gui arrow/ellipse/rect styles
 COLOR_KEY = {"arrow": "draw", "ellipse": "draw", "rect": "draw", "text": "text"}
-STYLE_KEYS = ("color", "width", "dash", "tips", "bend", "fill", "opacity")
+STYLE_KEYS = ("color", "width", "dash", "tips", "bend", "fill", "opacity", "line_opacity",
+              "corners")
+LINE_OPACITY_KEY = {"arrow": "draw opacity", "ellipse": "draw opacity",
+                    "rect": "draw opacity", "text": "text opacity"}
 
 
 def split_options(options):
@@ -161,6 +165,10 @@ def parse_style(options, kind):
             style["fill"] = value
         elif kind in ("ellipse", "rect") and key == "fill opacity" and value:
             style["opacity"] = float(value)
+        elif key == LINE_OPACITY_KEY.get(kind) and value:
+            style["line_opacity"] = float(value)
+        elif kind == "rect" and key == "rounded corners":
+            style["corners"] = value or "4pt"
         else:
             rest.append(part)
     return style, rest
@@ -186,6 +194,10 @@ def format_style(style, rest, kind):
         parts.append(f"fill={style['fill']}")
         if style.get("opacity") is not None and style["opacity"] < 1:
             parts.append(f"fill opacity={style['opacity']:g}")
+    if style.get("line_opacity") is not None and style["line_opacity"] < 1:
+        parts.append(f"{LINE_OPACITY_KEY[kind]}={style['line_opacity']:g}")
+    if kind == "rect" and style.get("corners"):
+        parts.append(f"rounded corners={style['corners']}")
     return ", ".join(parts + list(rest))
 
 
@@ -345,3 +357,21 @@ def click_target(words, x, y, region=None, exclude=(), tolerance=0.01):
             "nth": sum(1 for _, t in pool[:i] if t == word),
             "before": [t for _, t in pool[max(0, i - 2):i]],
             "after": [t for _, t in pool[i + 1:i + 3]]}
+
+
+def tip_ends(tips):
+    """Return the (START, END) arrow tips of a TikZ tip spec, each one of
+    "arrow", "bar" or None."""
+    tips = tips or "->"
+    start, _, end = tips.partition("-")
+    kind = {"": None, "<": "arrow", ">": "arrow", "latex": "arrow", "stealth": "arrow",
+            "|": "bar"}
+    return kind.get(start), kind.get(end)
+
+
+def length_pt(value, default=4.0):
+    """Return the TeX length VALUE (pt, mm, cm or a number) in points."""
+    m = re.match(r"\s*([0-9.]+)\s*(pt|mm|cm)?\s*$", value or "")
+    if not m:
+        return default
+    return float(m.group(1)) * {"pt": 1, None: 1, "mm": 2.84528, "cm": 28.4528}[m.group(2)]

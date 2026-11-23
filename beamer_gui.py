@@ -20,14 +20,15 @@ import shutil
 import sys
 
 import pymupdf
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSocketNotifier, Qt
+from PySide6.QtCore import (QEvent, QFileSystemWatcher, QPointF, QProcess, QRectF,
+                            QSocketNotifier, Qt, QTimer)
 from PySide6.QtGui import (QAction, QBrush, QColor, QIcon, QImage, QKeySequence,
                            QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox,
                                QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QGraphicsItem, QGraphicsPathItem, QGraphicsPixmapItem,
                                QGraphicsRectItem, QGraphicsScene, QGraphicsView,
-                               QHBoxLayout, QInputDialog, QLineEdit, QMainWindow,
+                               QHBoxLayout, QInputDialog, QLineEdit, QMainWindow, QMenu,
                                QPushButton, QSpinBox, QToolBar, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -137,7 +138,8 @@ class Element:
 
     def style_pen(self):
         ed = self.editor
-        color = ed.color(self.style.get("color"), DEFAULT_DRAW)
+        color = QColor(ed.color(self.style.get("color"), DEFAULT_DRAW))
+        color.setAlphaF(self.style.get("line_opacity", 1.0))
         pen = QPen(color, core.line_width_pt(self.style.get("width")) * ed.px_per_pt)
         dash = self.style.get("dash", "solid")
         if "dot" in dash and "dash" not in dash:
@@ -307,6 +309,21 @@ class BoxItem(QGraphicsRectItem, Element):
         else:
             super().mouseReleaseEvent(event)
 
+    def image_file(self):
+        """Return the image file shown by this element, or None."""
+        return getattr(self, "file", None) or None
+
+    def contextMenuEvent(self, event):
+        file = self.image_file()
+        if not file:
+            return
+        command = self.editor.image_command(file)
+        menu = QMenu()
+        action = menu.addAction(f"Edit {os.path.basename(file)} in {command or '...'}")
+        action.setEnabled(bool(command))
+        if menu.exec(event.screenPos()) == action:
+            self.editor.edit_image(file)
+
 
 class ImageItem(BoxItem):
     """Image added in the GUI; height follows width, as \\includegraphics does."""
@@ -370,7 +387,12 @@ class RectItem(ShapeItem):
     kind = "rect"
 
     def draw_shape(self, painter, rect):
-        painter.drawRect(rect)
+        corners = self.style.get("corners")
+        if corners:
+            r = core.length_pt(corners) * self.editor.px_per_pt
+            painter.drawRoundedRect(rect, r, r)
+        else:
+            painter.drawRect(rect)
 
 
 class ArrowItem(QGraphicsPathItem, Element):
@@ -408,6 +430,15 @@ class ArrowItem(QGraphicsPathItem, Element):
         base = tip - along * size
         return QPolygonF([tip, base + across * size / 2, base - across * size / 2, tip])
 
+    def bar(self, at, toward, pen):
+        """Return a bar across the line at AT, as TikZ's | tip."""
+        v = at - toward
+        n = max((v.x() ** 2 + v.y() ** 2) ** 0.5, 1e-6)
+        across = QPointF(-v.y() / n, v.x() / n) * max(pen.widthF() * ARROW_HEAD / 2, 4)
+        along = v / n * max(pen.widthF() / 2, 1)
+        return QPolygonF([at + across - along, at + across + along,
+                          at - across + along, at - across - along])
+
     def rebuild(self):
         start, end = self.ends
         pen = self.style_pen()
@@ -420,14 +451,15 @@ class ArrowItem(QGraphicsPathItem, Element):
         else:
             c1, c2 = start, end
             path.lineTo(end)
-        tips = self.style.get("tips", "->")
+        first, last = core.tip_ends(self.style.get("tips", "->"))
         self.setPen(pen)
         self.setBrush(Qt.NoBrush)
         heads = QPainterPath()
-        if tips in ("->", "<->"):
-            heads.addPolygon(self.head(end, c2, pen))
-        if tips in ("<-", "<->"):
-            heads.addPolygon(self.head(start, c1, pen))
+        for tip, at, toward in ((last, end, c2), (first, start, c1)):
+            if tip == "arrow":
+                heads.addPolygon(self.head(at, toward, pen))
+            elif tip == "bar":
+                heads.addPolygon(self.bar(at, toward, pen))
         self.heads = heads
         self.setPath(path)
         for handle, p in zip(self.handles, self.ends):
@@ -464,6 +496,7 @@ class CropItem(BoxItem):
 
     def __init__(self, editor, data, x, y, w, h):
         self.label = data.get("name") or self.kind
+        self.file = data.get("file") or None
         super().__init__(editor, data, x, y, w, h)
         self.picture = editor.crop(data["box"]) if data.get("box") else None
 
@@ -595,10 +628,18 @@ class StylePanel(QDockWidget):
         self.opacity.setRange(0, 1)
         self.opacity.setSingleStep(0.1)
         self.opacity.setValue(1)
+        self.line_opacity = QDoubleSpinBox()
+        self.line_opacity.setRange(0, 1)
+        self.line_opacity.setSingleStep(0.1)
+        self.line_opacity.setValue(1)
+        self.corners = QDoubleSpinBox()
+        self.corners.setRange(0, 50)
+        self.corners.setSuffix(" pt")
         for label, widget in [("Colour", self.color), ("Line", self.width),
                               ("Dash", self.dash), ("Tips", self.tips),
                               ("Bend", self.bend), ("Fill", self.fill),
-                              ("Fill opacity", self.opacity)]:
+                              ("Fill opacity", self.opacity), ("Opacity", self.line_opacity),
+                              ("Corners", self.corners)]:
             form.addRow(label, widget)
             signal = (widget.currentIndexChanged if isinstance(widget, QComboBox)
                       else widget.valueChanged)
@@ -642,10 +683,13 @@ class StylePanel(QDockWidget):
         self.bend.setValue(s.get("bend") or 0)
         self.fill.setCurrentText(s.get("fill") or "none")
         self.opacity.setValue(s.get("opacity", 1.0))
+        self.line_opacity.setValue(s.get("line_opacity", 1.0))
+        self.corners.setValue(core.length_pt(s["corners"]) if s.get("corners") else 0)
         arrow = item.kind == "arrow"
         shape = item.kind in ("ellipse", "rect")
         for widget, on in [(self.tips, arrow), (self.bend, arrow), (self.fill, shape),
-                           (self.opacity, shape), (self.width, item.kind != "text"),
+                           (self.opacity, shape), (self.corners, item.kind == "rect"),
+                           (self.width, item.kind != "text"),
                            (self.dash, item.kind != "text")]:
             widget.setEnabled(on)
         self.loading = False
@@ -654,10 +698,11 @@ class StylePanel(QDockWidget):
         style = {"color": self.color.currentText(), "width": self.width.currentText(),
                  "dash": self.dash.currentText(), "tips": self.tips.currentText(),
                  "bend": self.bend.value(), "fill": self.fill.currentText(),
-                 "opacity": self.opacity.value()}
+                 "opacity": self.opacity.value(), "line_opacity": self.line_opacity.value(),
+                 "corners": f"{self.corners.value():g}pt" if self.corners.value() else ""}
         return {k: v for k, v in style.items()
-                if v not in ("default", "none", "solid", 0, 0.0, "->")
-                or (k == "opacity" and v < 1)}
+                if v not in ("default", "none", "solid", 0, 0.0, "->", "")
+                and not (k in ("opacity", "line_opacity") and v >= 1)}
 
     def changed(self, *_):
         if self.loading:
@@ -666,7 +711,8 @@ class StylePanel(QDockWidget):
         for item in self.styled_selection():
             keep = {k: v for k, v in style.items()
                     if (k not in ("tips", "bend") or item.kind == "arrow")
-                    and (k not in ("fill", "opacity") or item.kind in ("ellipse", "rect"))}
+                    and (k not in ("fill", "opacity") or item.kind in ("ellipse", "rect"))
+                    and (k != "corners" or item.kind == "rect")}
             item.style = keep
             if hasattr(item, "update_style"):
                 item.update_style()
@@ -762,6 +808,14 @@ class Editor(QMainWindow):
         for guide in self.guides:
             guide.setZValue(20)
             guide.hide()
+        # Images opened in another program: saving them there updates the
+        # slide, once the program has finished writing (debounced).
+        self.watcher = QFileSystemWatcher(self)
+        self.watcher.fileChanged.connect(self.image_changed)
+        self.image_timer = QTimer(self)
+        self.image_timer.setSingleShot(True)
+        self.image_timer.setInterval(500)
+        self.image_timer.timeout.connect(self.save)
         self.load(session)
         self.view.viewport().installEventFilter(self)
         self.style_panel = StylePanel(self)
@@ -786,6 +840,8 @@ class Editor(QMainWindow):
         self.stem = core.safe_stem(session["stem"])
         self.frame_background = dict(session.get("frame_background")
                                      or {"color": "", "image": ""})
+        self.image_editors = {e["ext"].lower(): e["command"]
+                              for e in session.get("image_editors", [])}
         self.setWindowTitle(f"beamer-gui: {session['stem']}")
         pdf = session["background"]
         page_b = session.get("page_b", -1)
@@ -1029,6 +1085,36 @@ class Editor(QMainWindow):
                                       "file": rel, "x": .3, "y": .3, "w": .3}))
             self.statusBar().showMessage(f"Saved {rel}")
 
+    def image_path(self, file):
+        return core.resolve_image(file, self.tex_dir, self.graphics_path)
+
+    def image_command(self, file):
+        """Return the program for image FILE, if one is set and installed."""
+        ext = os.path.splitext(self.image_path(file))[1].lstrip(".").lower()
+        command = self.image_editors.get(ext)
+        return command if command and shutil.which(command) else None
+
+    def edit_image(self, file):
+        """Open image FILE in its program and recompile when it is saved."""
+        path = self.image_path(file)
+        command = self.image_command(file)
+        if not command:
+            self.statusBar().showMessage(
+                f"No program for {os.path.basename(path)}: see beamer-gui-image-editors")
+            return False
+        QProcess.startDetached(command, [path])
+        self.watcher.addPath(path)
+        self.statusBar().showMessage(f"Editing {os.path.basename(path)} in {command}; "
+                                     "saving it there updates the slide")
+        return True
+
+    def image_changed(self, path):
+        # Some programs replace the file: watch the new one.
+        if os.path.exists(path) and path not in self.watcher.files():
+            self.watcher.addPath(path)
+        self.statusBar().showMessage(f"{os.path.basename(path)} changed; recompiling")
+        self.image_timer.start()
+
     def edit_background(self):
         dialog = BackgroundDialog(self, self.frame_background)
         if dialog.exec():
@@ -1067,6 +1153,12 @@ class Editor(QMainWindow):
             message = json.loads(line)
         except ValueError:
             return
+        self.handle_message(message)
+
+    def handle_message(self, message):
+        """Act on a MESSAGE from Emacs: an error to show, or a new session."""
+        if "error" in message:
+            self.statusBar().showMessage(message["error"])
         if "session" in message:
             with open(message["session"]) as f:
                 self.load(json.load(f))

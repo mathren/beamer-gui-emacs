@@ -13,6 +13,13 @@ frame and opens it in the editor window.  The key is in
 The frame is compiled alone, with the document's preamble and with
 beamer's note options turned off, so the window shows the slide.
 
+When something is missing, a message says what: no
+=\documentclass= in the file (the frame and the preamble must be in the
+same file), a class other than beamer (it asks before going on), point
+outside a frame, =pdflatex= or Python not found, Python packages missing
+(the editor stops at once).  When LaTeX fails, the first error is shown
+in Emacs and in the editor's status bar.
+
 * In the editor
 
 | Key or action     | Effect                                                     |
@@ -25,16 +32,23 @@ beamer's note options turned off, so the window shows the slide.
 | =C-v=             | paste an image (saved in =fig_slides/=)                    |
 | =B=               | background of the frame: colour, tint, image               |
 | =S=               | snapping on or off                                         |
+| right-click image | edit it in Inkscape or GIMP; saving it updates the slide   |
 | =Del=             | delete the selected shapes                                 |
 | =C-s=             | write the changes to the buffer and recompile              |
 
-Elements of the frame are any environment of it and every
-=\includegraphics=.  =columns=, =center=, =minipage= and the overlay
+Elements of the frame are any environment of it, every
+=\includegraphics= and =\movie=, and the commands of the preamble (and
+the files it =\input=s) that draw a picture, such as a =\member= showing
+a photo with a name.  An optional first argument that is a length, as
+in =\begin{varblock}[0.5\textwidth]=, is the width: resizing changes
+it.  TikZ annotations of other text (=\tikzmark=, arrows between marks,
+strike-outs) are not elements.  =columns=, =center=, =minipage= and the overlay
 environments are looked into, not moved; verbatim environments are
 skipped.
 
-The *Style* panel sets the colour, line width, dash, arrow tips, bend,
-fill and fill opacity of the selected shapes.  Its colours are those
+The *Style* panel sets the colour, line width, dash, opacity, arrow
+tips (=->=, =-latex=, =-stealth=, bars, single or double), bend, fill,
+fill opacity and rounded corners of the selected shapes.  Its colours are those
 the preamble defines, and the files it =\input=s, then the standard
 named colours.
 
@@ -67,7 +81,8 @@ to the nearest word that has one.
 | =beamer-gui-container-environments= | looked into, not moved     |
 | =beamer-gui-ignored-environments=   | skipped                    |
 | =beamer-gui-inline-environments=    | set inside a line          |
-| =beamer-gui-movable-macros=         | =includegraphics=          |
+| =beamer-gui-movable-macros=         | =includegraphics=, =movie= |
+| =beamer-gui-image-editors=          | =inkscape=, =gimp=         |
 
 To use another key:
 #+begin_src elisp

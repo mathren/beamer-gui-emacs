@@ -107,7 +107,8 @@ def main(n, seed, session):
     for line in out:
         if line.strip():
             message = json.loads(line)
-            check_items(message["items"])
+            if "items" in message:          # not a jump to the source
+                check_items(message["items"])
     return ERRORS
 
 

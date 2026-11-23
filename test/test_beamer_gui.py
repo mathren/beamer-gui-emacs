@@ -126,6 +126,18 @@ def test_click_target():
     assert core.normalize_word("100%") == "100"
 
 
+def test_more_styles():
+    style, rest = core.parse_style("-latex, draw opacity=0.5, rounded corners=6pt", "rect")
+    assert style == {"line_opacity": 0.5, "corners": "6pt"} and rest == ["-latex"]
+    style, rest = core.parse_style("|-|, draw opacity=0.5", "arrow")
+    assert style == {"tips": "|-|", "line_opacity": 0.5}
+    assert core.format_style({"corners": "4pt", "line_opacity": 1}, [], "rect") == \
+        "rounded corners=4pt"
+    assert core.tip_ends("|->") == ("bar", "arrow")
+    assert core.tip_ends("-") == (None, None)
+    assert core.length_pt("1mm") == 2.84528 and core.length_pt("x") == 4.0
+
+
 def test_line_width_and_bend():
     assert core.line_width_pt(None) == core.BASE_LINE_WIDTH
     assert core.line_width_pt("thick") == 0.8
@@ -535,3 +547,49 @@ def test_click_in_moved_element_maps_to_compiled_page(editor):
     c1.setPos(c1.x() + 0.3 * editor.W, c1.y())      # moved, not yet saved
     info = editor.click_info(QPointF(0.45 * editor.W, 0.54 * editor.H))
     assert info["word"] == "Blockword" and info["element"] == "c1"
+
+
+# ---- more styles, external programs, errors ------------------------------------------
+
+def test_style_panel_corners_and_opacity(editor):
+    el = elements(editor)
+    editor.scene.clearSelection()
+    el["rect1"].setSelected(True)
+    panel = editor.style_panel
+    panel.corners.setValue(6)
+    panel.line_opacity.setValue(0.5)
+    opts = by_id(editor)["rect1"]["opts"]
+    assert "rounded corners=6pt" in opts and "draw opacity=0.5" in opts
+    editor.scene.clearSelection()
+    el["arrow1"].setSelected(True)
+    assert not panel.corners.isEnabled()
+    panel.tips.setCurrentText("|-|")
+    assert "|-|" in by_id(editor)["arrow1"]["opts"]
+
+
+def test_edit_image_in_external_program(editor, session, tmp_path, monkeypatch, capsys):
+    from PySide6.QtTest import QTest
+    program = tmp_path / "bin" / "fakeeditor"
+    program.parent.mkdir()
+    program.write_text("#!/bin/sh\nexit 0\n")
+    program.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{program.parent}:{os.environ['PATH']}")
+    editor.image_editors = {"png": "fakeeditor"}
+    image = elements(editor)["img1"]
+    assert image.image_file() == "fig_slides/g.png"
+    assert editor.image_command("fig_slides/g.png") == "fakeeditor"
+    assert editor.image_command("x.svg") is None
+    assert editor.edit_image("fig_slides/g.png")
+    path = editor.image_path("fig_slides/g.png")
+    assert path in editor.watcher.files()
+    capsys.readouterr()
+    editor.image_changed(path)            # as when the program saves the file
+    QTest.qWait(800)
+    assert '"items"' in capsys.readouterr().out
+    editor.image_editors = {}
+    assert not editor.edit_image("fig_slides/g.png")
+
+
+def test_error_from_emacs_shown(editor):
+    editor.handle_message({"error": "beamer-gui: LaTeX failed: Undefined control sequence."})
+    assert "LaTeX failed" in editor.statusBar().currentMessage()

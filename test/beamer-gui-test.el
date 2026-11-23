@@ -556,6 +556,163 @@ Skip the test if pdflatex is missing; fail if compilation fails."
                            (bgt-click '(:word "item" :raw "\\item Second")))))
 
 
+;;;; Styles
+
+(ert-deftest bgt-gui-items-image-files ()
+  (bgt-with bgt-frame
+    (let* ((b (bgt-frame-at "Hello"))
+           (items (beamer-gui-gui-items (beamer-gui-frame-model (car b) (cdr b)) bgt-measured)))
+      (should (equal (plist-get (cl-find "c1" items :key (lambda (i) (plist-get i :id))
+                                         :test #'equal)
+                                :file)
+                     "fig_slides/a.png"))
+      (should (equal (plist-get (cl-find "c2" items :key (lambda (i) (plist-get i :id))
+                                         :test #'equal)
+                                :file)
+                     "")))))
+
+(ert-deftest bgt-compile-styles ()
+  "Every style the GUI offers compiles."
+  (bgt-compile
+   (concat "\\documentclass{beamer}\n" beamer-gui-preamble
+           "\\begin{document}\n\\begin{frame}\n"
+           (mapconcat
+            #'beamer-gui-item-to-tex
+            (append
+             (cl-loop for tips in '("->" "<-" "<->" "-" "-latex" "latex-latex" "-stealth"
+                                    "stealth-stealth" "|->" "|-|")
+                      for i from 1
+                      collect (list :id (format "a%d" i) :kind "arrow" :x1 0.1 :y1 (* i 0.05)
+                                    :x2 0.4 :y2 (* i 0.05)
+                                    :opts (concat "draw=blue, very thick, dashed, " tips
+                                                  ", bend left=20, draw opacity=0.5")))
+             '((:id "r" :kind "rect" :x 0.5 :y 0.1 :w 0.2 :h 0.1
+                    :opts "draw=red, fill=blue, fill opacity=0.3, rounded corners=6pt, dotted")
+               (:id "e" :kind "ellipse" :x 0.5 :y 0.4 :w 0.2 :h 0.1
+                    :opts "draw=red, ultra thick, draw opacity=0.4")
+               (:id "t" :kind "text" :x 0.5 :y 0.6 :w 0.3
+                    :opts "text=red, text opacity=0.4" :text "Styled")))
+            "\n")
+           "\n\\end{frame}\n\\end{document}\n")))
+
+
+;;;; The document's own pictures and boxes
+
+(defconst bgt-definitions-preamble
+  "\\newcommand{\\member}[4][40pt]{%
+  \\begin{tabular}[t]{@{}c@{}}\\includegraphics[width=#1]{#2}\\\\#3\\\\#4\\end{tabular}}
+\\newcommand\\tikzmark[1]{\\tikz[remember picture,overlay]\\node (#1) {};}
+\\newcommand{\\hcancel}[1]{\\tikz[baseline=(t.base)]{\\node (t) {#1};}}
+\\newcommand{\\logo}{\\includegraphics{logo}}
+\\newenvironment<>{varblock}[2][.9\\textwidth]{\\begin{actionenv}#3}{\\end{actionenv}}
+\\newenvironment{plain}[1]{}{}
+"
+  "Definitions in the style of beamer_template_mrenzo's setup.tex.")
+
+(ert-deftest bgt-document-definitions ()
+  (should (equal (beamer-gui-document-definitions (list bgt-definitions-preamble))
+                 '(:macros (("member" 3 . "40pt") ("logo" 0))
+                   :environments (("varblock" . ".9\\textwidth"))))))
+
+(ert-deftest bgt-scan-document-pictures ()
+  (let ((beamer-gui--document-definitions
+         (beamer-gui-document-definitions (list bgt-definitions-preamble))))
+    (bgt-with (concat "\\begin{frame}{F}\n"
+                      "\\member[30pt]{a.png}{Ada}{Lovelace} \\member{b.png}{Bo}{B}\n"
+                      "\\movie[width=3cm]{poster}{film.mp4} \\tikzmark{m}\\hcancel{no} \\logo\n"
+                      "\\begin{varblock}<2->[0.5\\textwidth]{T}x\\end{varblock}\n"
+                      "\\end{frame}\n")
+      (let ((elements (plist-get (beamer-gui-frame-model (point-min) (point-max)) :elements)))
+        (should (equal (mapcar (lambda (e) (buffer-substring (plist-get e :beg) (plist-get e :end)))
+                               elements)
+                       '("\\member[30pt]{a.png}{Ada}{Lovelace}" "\\member{b.png}{Bo}{B}"
+                         "\\movie[width=3cm]{poster}{film.mp4}" "\\logo"
+                         "\\begin{varblock}<2->[0.5\\textwidth]{T}x\\end{varblock}")))
+        (should (equal (mapcar (lambda (e) (beamer-gui--resize-mode (plist-get e :name)
+                                                                    (plist-get e :inline)))
+                               elements)
+                       '("width" "width" "none" "none" "width")))))))
+
+(ert-deftest bgt-resize-width-argument ()
+  (let ((beamer-gui--document-definitions
+         (beamer-gui-document-definitions (list bgt-definitions-preamble))))
+    (should (equal (beamer-gui-resize-code "\\member[30pt]{a.png}{Ada}{L}" "member" 2 0.2)
+                   "\\member[60pt]{a.png}{Ada}{L}"))
+    (should (equal (beamer-gui-resize-code "\\member{a.png}{Ada}{L}" "member" 1.5 0.2)
+                   "\\member[60pt]{a.png}{Ada}{L}"))
+    (should (equal (beamer-gui-resize-code "\\begin{varblock}<2->[0.5\\textwidth]{T}x\\end{varblock}"
+                                           "varblock" 0.5 0.2)
+                   "\\begin{varblock}<2->[0.25\\textwidth]{T}x\\end{varblock}"))
+    (should (equal (beamer-gui-resize-code "\\begin{varblock}{T}x\\end{varblock}" "varblock" 0.5 0.2)
+                   "\\begin{varblock}[0.45\\textwidth]{T}x\\end{varblock}"))))
+
+
+;;;; Failing gracefully
+
+(defmacro bgt-with-file (text &rest body)
+  "Run BODY in a buffer visiting a temporary .tex file holding TEXT."
+  (declare (indent 1))
+  `(let ((file (make-temp-file "bgt" nil ".tex" ,text)))
+     (with-current-buffer (find-file-noselect file)
+       (unwind-protect (progn (goto-char (point-min)) ,@body)
+         (set-buffer-modified-p nil)
+         (kill-buffer)))))
+
+(defun bgt-check-error ()
+  "Return the message of the `user-error' of the checks, or nil."
+  (condition-case err (progn (beamer-gui--check-environment) nil)
+    (user-error (cadr err))))
+
+(ert-deftest bgt-check-buffer-and-class ()
+  (with-temp-buffer
+    (insert bgt-frame)
+    (should (string-match-p "visit a file" (bgt-check-error))))
+  (bgt-with-file "\\begin{frame}\nx\n\\end{frame}\n"
+    (should (string-match-p "no \\\\documentclass" (bgt-check-error))))
+  (bgt-with-file "\\documentclass{article}\n\\begin{document}\n\\begin{frame}\nx\n\\end{frame}\n"
+    (search-forward "x")
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil)))
+      (should (string-match-p "not a beamer document" (bgt-check-error))))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+      (should-not (bgt-check-error))))
+  (bgt-with-file bgt-frame
+    (should (string-match-p "point is not inside" (bgt-check-error)))
+    (search-forward "Hello")
+    (should-not (bgt-check-error))))
+
+(ert-deftest bgt-check-tools ()
+  (bgt-with-file bgt-frame
+    (search-forward "Hello")
+    (let ((beamer-gui-latex-command '("no-such-latex")))
+      (should (string-match-p "no-such-latex. not found" (bgt-check-error))))
+    (let ((beamer-gui-python "/no/such/python"))
+      (should (string-match-p "Python ./no/such/python. not found" (bgt-check-error))))
+    (let ((beamer-gui-script "/no/such/script.py"))
+      (should (string-match-p "GUI script" (bgt-check-error))))))
+
+(ert-deftest bgt-latex-error-message ()
+  (let ((log (make-temp-file "bgt" nil ".log"
+                             "This is pdfTeX\n! Undefined control sequence.\n<recently read> \\foo \n\nl.12 \\foo\n            bar\n")))
+    (should (equal (beamer-gui--latex-error log) "Undefined control sequence. (at: \\foo)"))
+    (should-not (beamer-gui--latex-error "/no/such.log"))))
+
+(ert-deftest bgt-gui-stops-with-error ()
+  "A GUI that fails at start (missing PySide6) is reported."
+  (unless (executable-find "python3") (ert-skip "python3 missing"))
+  (let ((messages nil) (done nil))
+    (when (get-buffer "*beamer-gui-errors*") (kill-buffer "*beamer-gui-errors*"))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+      (make-process :name "bgt-gui" :command
+                    '("python3" "-c" "import sys; sys.stderr.write(\"Traceback...\\nModuleNotFoundError: No module named 'PySide6'\\n\"); sys.exit(1)")
+                    :stderr (get-buffer-create "*beamer-gui-errors*")
+                    :sentinel (lambda (p e) (beamer-gui--gui-sentinel p e) (setq done t)))
+      (with-timeout (20 (ert-fail "timeout"))
+        (while (not done) (accept-process-output nil 0.1))))
+    (should (cl-some (lambda (m) (string-match-p "editor stopped: ModuleNotFoundError: No module named 'PySide6'" m))
+                     messages))))
+
+
 ;;;; Preamble, labels, mode
 
 (ert-deftest bgt-insert-preamble-and-upgrade ()

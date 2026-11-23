@@ -14,7 +14,7 @@ test-py:
 	QT_QPA_PLATFORM=offscreen $(PYTHON) -m pytest -q test/test_beamer_gui.py
 
 test-layout:
-	$(PYTHON) -m pytest -q test/test_layout.py
+	$(PYTHON) -m pytest -q test/test_layout.py test/test_template.py
 
 # Random documents, edits and GUI input; minutes per run, not part of test.
 fuzz:
