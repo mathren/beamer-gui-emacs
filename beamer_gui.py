@@ -65,6 +65,16 @@ def load_pixmap(path):
     return None if pm.isNull() else pm
 
 
+def page_words(path, page):
+    """Return the words of PAGE of the PDF at PATH, in reading order.
+
+    Each is (X0, Y0, X1, Y1, TEXT) with coordinates in page fractions."""
+    pg = pymupdf.open(path)[page]
+    w, h = pg.rect.width, pg.rect.height
+    return [(x0 / w, y0 / h, x1 / w, y1 / h, text)
+            for x0, y0, x1, y1, text, *_ in pg.get_text("words")]
+
+
 def placeholder_pixmap():
     pm = QPixmap(200, 150)
     pm.fill(QColor("#ccc"))
@@ -512,6 +522,7 @@ class RawItem(CropItem):
         h = data["box"][3] * editor.H if data.get("box") else PLACEHOLDER_HEIGHT
         super().__init__(editor, data, x, y, data["w"] * editor.W, h)
         self.resize = "width"
+        self.box0 = list(data["box"]) if data.get("box") else None
 
     def to_dict(self):
         x, y = self.frac_pos()
@@ -783,6 +794,7 @@ class Editor(QMainWindow):
         self.background.setPixmap(bg)
         self.W, self.H = float(bg.width()), float(bg.height())
         self.page_a = render_pdf(pdf, SCENE_WIDTH, page_a) if page_a >= 0 else bg
+        self.page_words = page_words(pdf, page_a)
         paper = session.get("paper") or [self.W, self.H]
         self.px_per_pt = self.W / paper[0]
         self.colors = self.sample_colors(pdf, session)
@@ -804,12 +816,62 @@ class Editor(QMainWindow):
 
     # snapping
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.MouseButtonPress:
+        kind = event.type()
+        if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick):
+            scene_pos = self.view.mapToScene(event.position().toPoint())
+            ctrl = event.modifiers() & Qt.ControlModifier
+            under = self.element_at(scene_pos)
+            if (ctrl and kind == QEvent.MouseButtonPress) or (
+                    kind == QEvent.MouseButtonDblClick and not isinstance(under, TextItem)):
+                self.goto(scene_pos)
+                return True
+        if kind == QEvent.MouseButtonPress:
             self.dragging = True
-        elif event.type() == QEvent.MouseButtonRelease:
+        elif kind == QEvent.MouseButtonRelease:
             self.dragging = False
             self.show_guides(None, None)
         return False
+
+    # jumping to the source
+    def element_at(self, scene_pos, kinds=None):
+        """Return the topmost element whose box holds SCENE_POS, or None.
+
+        KINDS, a class or tuple of classes, limits the elements seen."""
+        for e in reversed(self.elements):
+            if (isinstance(e, kinds or BoxItem)
+                    and QRectF(e.pos(), e.rect().size()).contains(scene_pos)):
+                return e
+        return None
+
+    def click_info(self, scene_pos):
+        """Describe the text clicked at SCENE_POS (see core.click_target).
+
+        A click in an element moved or resized in the GUI is mapped back
+        to where it is on the compiled page."""
+        x, y = scene_pos.x() / self.W, scene_pos.y() / self.H
+        element = self.element_at(scene_pos, CropItem)      # elements with text
+        boxes = [e.box0 for e in self.elements if isinstance(e, CropItem)
+                 and getattr(e, "box0", None)]
+        region = None
+        if isinstance(element, CropItem) and getattr(element, "box0", None):
+            cx, cy, cw, ch = element.frac_box()
+            region = element.box0
+            x = region[0] + (x - cx) / max(cw, 1e-6) * region[2]
+            y = region[1] + (y - cy) / max(ch, 1e-6) * region[3]
+        info = core.click_target(self.page_words, x, y, region,
+                                 () if region else boxes)
+        if element is not None and element.label in ("includegraphics", "image"):
+            info = dict(info, word="")      # letters in a picture are not in the source
+        if not element and not info["word"]:
+            # No text here: a drawn shape or image jumps to its block.
+            element = self.element_at(scene_pos)
+        info["element"] = element.id if element else None
+        return info
+
+    def goto(self, scene_pos):
+        """Ask Emacs to show the source of the text at SCENE_POS."""
+        sys.stdout.write(json.dumps({"goto": self.click_info(scene_pos)}) + "\n")
+        sys.stdout.flush()
 
     def snap_active(self, item):
         """Snap ITEM only while the mouse drags it alone."""

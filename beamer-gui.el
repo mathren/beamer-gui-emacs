@@ -56,6 +56,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'pulse)
 
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
 (declare-function org-end-of-subtree "org" (&optional invisible-ok to-heading))
@@ -1687,6 +1688,166 @@ Version 1 is the preamble of beamer-gui 0.1."
       (insert beamer-gui-preamble)))))
 
 
+;;;; Jumping from the GUI to the source
+
+(defun beamer-gui--comment-p (pos)
+  "Return non-nil if POS is inside a LaTeX comment."
+  (save-excursion
+    (goto-char pos)
+    (let ((line-start (line-beginning-position)) found)
+      (while (and (not found) (search-backward "%" line-start t))
+        (unless (beamer-gui--escaped-p (point))
+          (setq found t)))
+      found)))
+
+(defun beamer-gui--word-occurrences (word ranges)
+  "Return the positions of WORD in RANGES, in order, outside comments.
+RANGES is a list of (BEG . END).  WORD matches as a whole word,
+case-sensitively."
+  (let ((case-fold-search nil)
+        (regexp (concat "\\(?:^\\|[^[:alnum:]]\\)\\(" (regexp-quote word)
+                        "\\)\\(?:[^[:alnum:]]\\|$\\)"))
+        positions)
+    (save-excursion
+      (dolist (range ranges)
+        (goto-char (car range))
+        (while (and (< (point) (cdr range))
+                    (re-search-forward regexp (cdr range) t))
+          (let ((pos (match-beginning 1)))
+            (goto-char (match-end 1))
+            ;; Not in a comment, a macro name (after an odd number of
+            ;; backslashes), nor an environment name.
+            (unless (or (beamer-gui--comment-p pos)
+                        (beamer-gui--escaped-p pos)
+                        (save-excursion
+                          (goto-char pos)
+                          (looking-back "\\\\\\(?:begin\\|end\\){" (- pos 7))))
+              (push pos positions))))))
+    (nreverse positions)))
+
+(defun beamer-gui--neighbour-score (pos before after)
+  "Return how close the words of BEFORE and AFTER are to POS.
+Each neighbour found within 200 characters adds up to 1, more when
+nearer, so the best-placed occurrence of a repeated word wins."
+  (let ((score 0.0) (case-fold-search nil))
+    (save-excursion
+      (dolist (w before)
+        (goto-char pos)
+        (when (and (not (string-empty-p w))
+                   (search-backward w (max (point-min) (- pos 200)) t))
+          (cl-incf score (/ 1.0 (1+ (/ (- pos (point)) 20.0))))))
+      (dolist (w after)
+        (goto-char pos)
+        (when (and (not (string-empty-p w))
+                   (search-forward w (min (point-max) (+ pos 200 (length w))) t))
+          (cl-incf score (/ 1.0 (1+ (/ (- (point) pos) 20.0)))))))
+    score))
+
+(defun beamer-gui-find-word (ranges word nth before after)
+  "Return the source position of the clicked WORD in RANGES, or nil.
+NTH is how many times WORD occurs before the clicked one on the
+page, in the same element; BEFORE and AFTER are the words around
+it.  The occurrence with most neighbours nearby wins, then the NTH."
+  (let ((found (and (not (string-empty-p (or word "")))
+                    (beamer-gui--word-occurrences word ranges))))
+    (when found
+      (let* ((scores (mapcar (lambda (p) (beamer-gui--neighbour-score p before after))
+                             found))
+             (best (apply #'max scores))
+             ;; Occurrences about as well placed as the best one are
+             ;; told apart by their order on the page.
+             (candidates (cl-loop for p in found for sc in scores
+                                  when (>= sc (- best 0.1)) collect p)))
+        (or (nth (or nth 0) candidates)
+            (car (last candidates)))))))
+
+(defun beamer-gui--neighbour-position (ranges before after)
+  "Return the position in RANGES of the nearest word of BEFORE or AFTER.
+For clicks on maths, accented or macro text, not found literally."
+  (cl-some (lambda (w)
+             (and (not (string-empty-p w))
+                  (car (beamer-gui--word-occurrences w ranges))))
+           (append (reverse before) after)))
+
+(defun beamer-gui--literal-position (text ranges)
+  "Return the first position of TEXT, literally, in RANGES, or nil."
+  (let ((case-fold-search nil))
+    (save-excursion
+      (cl-some (lambda (range)
+                 (goto-char (car range))
+                 (and (search-forward text (cdr range) t) (match-beginning 0)))
+               ranges))))
+
+(defun beamer-gui--goto-ranges (beg end id)
+  "Return the source ranges to search for a word clicked in element ID.
+The frame runs from BEG to END.  With no ID, the frame text outside
+all elements.  Also return the
+position to fall back to, as (RANGES . FALLBACK)."
+  (let* ((model (beamer-gui-frame-model beg end))
+         (all (append (plist-get model :blocks) (plist-get model :elements)))
+         (element (and id (cl-find id all :key (lambda (e) (plist-get e :id))
+                                    :test #'equal))))
+    (if element
+        (cons (list (cons (plist-get element :beg) (plist-get element :end)))
+              (plist-get element :beg))
+      ;; From the frame start, so that the frame title is included.
+      (let* ((body (beamer-gui--frame-body beg end))
+             (spans (sort (mapcar (lambda (e) (cons (plist-get e :beg) (plist-get e :end))) all)
+                          (lambda (a b) (< (car a) (car b)))))
+             (ranges nil) (from beg))
+        (dolist (span spans)
+          (when (> (car span) from) (push (cons from (car span)) ranges))
+          (setq from (max from (cdr span))))
+        (push (cons from (cdr body)) ranges)
+        (cons (nreverse ranges) beg)))))
+
+(defun beamer-gui-goto-click (beg end click)
+  "Move point to the source of CLICK in the frame from BEG to END.
+CLICK is the plist sent by the GUI: :word, :nth, :before, :after,
+:element, and :raw, the word as printed (found literally first if it
+is not a plain word).  Return the position."
+  (pcase-let* ((`(,ranges . ,fallback)
+                (beamer-gui--goto-ranges beg end (plist-get click :element)))
+               (find (lambda (ranges)
+                       (beamer-gui-find-word ranges (plist-get click :word)
+                                             (plist-get click :nth)
+                                             (plist-get click :before)
+                                             (plist-get click :after))))
+               (frame (list (cons beg end)))
+               (raw (plist-get click :raw))
+               ;; The exact word first: in the element, then in the whole
+               ;; frame (text seen through a moved element is not in its
+               ;; source); then the words around it; then the element.
+               (pos (or (and raw (> (length raw) 2)          ; verbatim code
+                             (or (beamer-gui--literal-position raw ranges)
+                                 (beamer-gui--literal-position raw frame)))
+                        (funcall find ranges)
+                        (and (plist-get click :element) (funcall find frame))
+                        (beamer-gui--neighbour-position
+                         ranges (plist-get click :before) (plist-get click :after))
+                        fallback)))
+    (goto-char pos)
+    pos))
+
+(defun beamer-gui--goto (session click)
+  "Show the source of CLICK, sent by the GUI of SESSION, in Emacs."
+  (let ((buffer (beamer-gui--session-buffer session)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let ((pos (beamer-gui-goto-click (marker-position (beamer-gui--session-beg session))
+                                          (marker-position (beamer-gui--session-end session))
+                                          click)))
+          (let ((window (display-buffer buffer)))
+            (when window
+              (set-window-point window pos)
+              (select-window window)
+              (select-frame-set-input-focus (window-frame window))))
+          (goto-char pos)
+          (when (fboundp 'pulse-momentary-highlight-region)
+            (pulse-momentary-highlight-region
+             pos (min (point-max) (+ pos (max 1 (length (or (plist-get click :word) ""))))))))))))
+
+
 ;;;; Compilation
 
 (defun beamer-gui--compile (doc dir tmpdir callback &optional on-fail)
@@ -1819,9 +1980,12 @@ Call CALLBACK with the name of the GUI input file."
             (let* ((message (json-parse-string line :object-type 'plist
                                                :array-type 'list :null-object nil))
                    (items (plist-get message :items)))
-              (when (listp items)
+              (cond
+               ((plist-get message :goto)
+                (beamer-gui--goto session (plist-get message :goto)))
+               ((listp items)
                 (beamer-gui--save-items session items
-                                        (plist-get message :background))))))))))
+                                        (plist-get message :background)))))))))))
 
 (defun beamer-gui--start-gui (session file)
   "Start the GUI process of SESSION on the GUI input FILE."

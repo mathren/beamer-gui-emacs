@@ -139,3 +139,21 @@ With NOOP, send the items back unchanged."
         (beamer-gui-apply-items (car b) (cdr b) (plist-get message :items) meas
                                 (plist-get message :background))
         (save-buffer)))))
+
+(defun fuzz-clicks (file clicks-file out)
+  "Jump to each click of CLICKS-FILE in FILE; write what point lands on to OUT."
+  (with-current-buffer (find-file-noselect file)
+    (goto-char (point-min))
+    (re-search-forward beamer-gui--frame-begin-regexp)
+    (let* ((b (beamer-gui-frame-bounds))
+           (clicks (with-temp-buffer
+                     (insert-file-contents clicks-file)
+                     (json-parse-string (buffer-string) :object-type 'plist
+                                        :array-type 'list :null-object nil)))
+           (results
+            (mapcar (lambda (click)
+                      (let ((pos (beamer-gui-goto-click (car b) (cdr b) click)))
+                        (buffer-substring-no-properties
+                         pos (min (point-max) (+ pos (length (plist-get click :word)))))))
+                    clicks)))
+      (with-temp-file out (insert (json-serialize (vconcat results)))))))

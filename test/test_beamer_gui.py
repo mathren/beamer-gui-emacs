@@ -113,6 +113,19 @@ def test_typed_text_checks():
     assert core.text_problem("a\\") == "the text ends with a backslash"
 
 
+def test_click_target():
+    words = [(0.1, 0.1, 0.2, 0.15, "▶Second"), (0.25, 0.1, 0.3, 0.15, "item,"),
+             (0.1, 0.5, 0.2, 0.55, "Second"), (0.25, 0.5, 0.3, 0.55, "ﬁnal-"),
+             (0.6, 0.6, 0.7, 0.65, "inbox")]
+    got = core.click_target(words, 0.15, 0.52, exclude=[(0.55, 0.55, 0.3, 0.3)])
+    assert got == {"word": "Second", "raw": "", "nth": 1, "before": ["Second", "item"],
+                   "after": ["final"]}
+    got = core.click_target(words, 0.65, 0.62, region=(0.55, 0.55, 0.3, 0.3))
+    assert got["word"] == "inbox" and got["nth"] == 0 and got["before"] == []
+    assert core.click_target(words, 0.9, 0.9)["word"] == ""       # nothing near
+    assert core.normalize_word("100%") == "100"
+
+
 def test_line_width_and_bend():
     assert core.line_width_pt(None) == core.BASE_LINE_WIDTH
     assert core.line_width_pt("thick") == 0.8
@@ -471,3 +484,54 @@ def test_snapping_with_real_mouse_drag(editor):
     assert editor.guides[0].isVisible()
     send(QEvent.MouseButtonRelease, grab + QPointF(target_dx, 0), Qt.NoButton)
     assert not editor.guides[0].isVisible()
+
+
+# ---- jumping to the source -------------------------------------------------------
+
+def test_ctrl_click_and_double_click_send_goto(editor, capsys):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    editor.page_words = [(0.12, 0.52, 0.2, 0.56, "Blockword")]   # in element c1's box
+    view = editor.view
+    editor.show()
+
+    def send(kind, scene_pt, modifiers):
+        p = view.mapFromScene(scene_pt)
+        QApplication.sendEvent(view.viewport(), QMouseEvent(
+            kind, QPointF(p), QPointF(view.viewport().mapToGlobal(p)),
+            Qt.LeftButton, Qt.LeftButton, modifiers))
+
+    point = QPointF(0.15 * editor.W, 0.54 * editor.H)
+    send(QEvent.MouseButtonPress, point, Qt.ControlModifier)
+    message = json.loads(capsys.readouterr().out.strip())
+    assert message == {"goto": {"word": "Blockword", "raw": "", "nth": 0, "before": [],
+                                "after": [], "element": "c1"}}
+    send(QEvent.MouseButtonDblClick, point, Qt.NoModifier)
+    assert json.loads(capsys.readouterr().out.strip())["goto"]["element"] == "c1"
+
+
+def test_double_click_on_text_shape_still_edits(editor, capsys, monkeypatch):
+    calls = []
+    monkeypatch.setattr(beamer_gui.QInputDialog, "getMultiLineText",
+                        staticmethod(lambda *a: (calls.append(1), ("new", True))[1]))
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    view = editor.view
+    editor.show()
+    text = elements(editor)["text1"]
+    p = view.mapFromScene(text.mapToScene(text.rect().center()))
+    QApplication.sendEvent(view.viewport(), QMouseEvent(
+        QEvent.MouseButtonDblClick, QPointF(p), QPointF(view.viewport().mapToGlobal(p)),
+        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    assert calls and text.text == "new"
+    assert capsys.readouterr().out == ""
+
+
+def test_click_in_moved_element_maps_to_compiled_page(editor):
+    c1 = elements(editor)["c1"]                     # box0 (0.1, 0.5, 0.3, 0.2)
+    editor.page_words = [(0.12, 0.52, 0.2, 0.56, "Blockword")]
+    c1.setPos(c1.x() + 0.3 * editor.W, c1.y())      # moved, not yet saved
+    info = editor.click_info(QPointF(0.45 * editor.W, 0.54 * editor.H))
+    assert info["word"] == "Blockword" and info["element"] == "c1"

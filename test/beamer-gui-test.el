@@ -498,6 +498,64 @@ Skip the test if pdflatex is missing; fail if compilation fails."
         (should (equal (split-string (buffer-string)) '("255" "0" "0")))))))
 
 
+;;;; Jumping from the GUI to the source
+
+(defconst bgt-click-frame
+  "\\begin{frame}{Title word}
+  First text here. % a comment with Second
+  \\begin{itemize}
+  \\item Second item
+  \\item Second item again
+  \\end{itemize}
+  The text with Item, item and B b.
+\\end{frame}
+"
+  "Frame for click tests.")
+
+(defun bgt-click (click)
+  "Return the text at the position CLICK jumps to in `bgt-click-frame'."
+  (bgt-with bgt-click-frame
+    (let ((pos (beamer-gui-goto-click (point-min) (point-max) click)))
+      (buffer-substring pos (min (point-max) (+ pos 12))))))
+
+(ert-deftest bgt-click-plain-and-title ()
+  (should (string-prefix-p "First" (bgt-click '(:word "First"))))
+  (should (string-prefix-p "word}" (bgt-click '(:word "word")))))      ; frame title
+
+(ert-deftest bgt-click-skips-comments-macros-and-case ()
+  ;; "item" as a word, not \item nor itemize; "b" not "B".
+  (should (string-prefix-p "item and" (bgt-click '(:word "item"))))
+  (should (string-prefix-p "b." (bgt-click '(:word "b"))))
+  ;; After \\ (a line break) a word is text, not a macro name.
+  (bgt-with "\\begin{frame}\nTwo\\\\lines\n\\end{frame}\n"
+    (goto-char (beamer-gui-goto-click (point-min) (point-max) '(:word "lines")))
+    (should (looking-at-p "lines"))))
+
+(ert-deftest bgt-click-element-nth-and-neighbours ()
+  (with-temp-buffer
+    (insert bgt-click-frame)
+    (let* ((id (plist-get (car (plist-get (beamer-gui-frame-model (point-min) (point-max))
+                                          :elements))
+                          :id))
+           (second (lambda (click)
+                     (let ((pos (beamer-gui-goto-click (point-min) (point-max)
+                                                       (append (list :element id) click))))
+                       (buffer-substring pos (line-end-position))))))
+      (should (equal (funcall second '(:word "Second" :nth 1)) "Second item again"))
+      (should (equal (funcall second '(:word "Second" :nth 0 :after ("item" "again")))
+                     "Second item again"))
+      ;; A word not in the element's source is looked for in the frame.
+      (should (string-prefix-p "First" (funcall second '(:word "First")))))))
+
+(ert-deftest bgt-click-fallbacks ()
+  ;; Maths or accents: a neighbour; nothing at all: the frame start.
+  (should (string-prefix-p "here." (bgt-click '(:word "x2" :before ("here")))))
+  (should (string-prefix-p "\\begin{frame" (bgt-click '(:word ""))))
+  ;; Code shown verbatim is looked for as printed.
+  (should (string-prefix-p "\\item Second"
+                           (bgt-click '(:word "item" :raw "\\item Second")))))
+
+
 ;;;; Preamble, labels, mode
 
 (ert-deftest bgt-insert-preamble-and-upgrade ()

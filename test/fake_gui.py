@@ -7,6 +7,8 @@ import os
 import sys
 
 s = json.load(open(sys.argv[1]))
+print(json.dumps({"goto": {"word": "Hello", "nth": 0, "before": [], "after": [],
+                           "element": None}}), flush=True)
 items = s["items"]
 next(i for i in items if i["kind"] == "image")["x"] = 0.5
 items.append({"kind": "arrow", "id": "arrow9", "x1": 0.1, "y1": 0.1, "x2": 0.3, "y2": 0.3,

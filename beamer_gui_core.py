@@ -290,3 +290,58 @@ def text_problem(text):
                 return "a } has no matching {"
         i += 1
     return "a { has no matching }" if depth else None
+
+
+# ---- clicked words -------------------------------------------------------------
+
+def normalize_word(text):
+    """Return TEXT as it would appear in the LaTeX source.
+
+    Ligatures are expanded (NFKC), surrounding punctuation dropped, and
+    a hyphen ending a line removed."""
+    import unicodedata
+    text = unicodedata.normalize("NFKC", text)
+    if text.endswith("-") and len(text) > 1:
+        text = text[:-1]
+    # Bullets, punctuation, % (\% in the source) and the like around it.
+    return re.sub(r"^[^\w]+|[^\w]+$", "", text)
+
+
+def inside(box, x, y):
+    """Return True if point X, Y is inside BOX (x, y, w, h)."""
+    bx, by, bw, bh = box
+    return bx <= x <= bx + bw and by <= y <= by + bh
+
+
+def click_target(words, x, y, region=None, exclude=(), tolerance=0.01):
+    """Describe the word clicked at X, Y for the Emacs side.
+
+    WORDS are (X0, Y0, X1, Y1, TEXT) in page fractions, in reading
+    order.  Only words in REGION (a box), or with no REGION outside all
+    EXCLUDE boxes, count: those of the clicked element, or the text
+    outside elements.  Return a dict: word, nth (earlier occurrences of
+    the same word there), before and after (two neighbours each)."""
+    def counts(w):
+        cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+        if region is not None:
+            return inside(region, cx, cy)
+        return not any(inside(b, cx, cy) for b in exclude)
+
+    def distance(w):
+        dx = max(w[0] - x, 0, x - w[2])
+        dy = max(w[1] - y, 0, y - w[3])
+        return (dx * dx + dy * dy) ** 0.5
+
+    pool = [(w, normalize_word(w[4])) for w in words if counts(w)]
+    pool = [(w, t) for w, t in pool if t]
+    if not pool:
+        return {"word": "", "raw": "", "nth": 0, "before": [], "after": []}
+    i = min(range(len(pool)), key=lambda k: distance(pool[k][0]))
+    if distance(pool[i][0]) > tolerance:
+        return {"word": "", "raw": "", "nth": 0, "before": [], "after": []}
+    word = pool[i][1]
+    raw = pool[i][0][4]
+    return {"word": word, "raw": raw if re.search(r"[\\{}]", raw) else "",
+            "nth": sum(1 for _, t in pool[:i] if t == word),
+            "before": [t for _, t in pool[max(0, i - 2):i]],
+            "after": [t for _, t in pool[i + 1:i + 3]]}
