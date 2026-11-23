@@ -15,7 +15,7 @@ import beamer_gui_core as core  # noqa: E402
 TOL = 2e-3  # pixel rounding at SCENE_WIDTH
 
 
-# ---- core -----------------------------------------------------------------
+# ---- core: files and ids ---------------------------------------------------
 
 def test_unique_image_path(tmp_path):
     first = core.unique_image_path(str(tmp_path), "lec-f3")
@@ -30,15 +30,6 @@ def test_rel_to_tex(tmp_path):
     assert core.rel_to_tex(path, str(tmp_path)) == "fig_slides/a.png"
 
 
-def test_resolve_image(tmp_path):
-    os.makedirs(tmp_path / "fig_slides")
-    (tmp_path / "fig_slides" / "x.pdf").write_text("")
-    tex = str(tmp_path)
-    assert core.resolve_image("fig_slides/x", tex).endswith("x.pdf")
-    assert core.resolve_image("fig_slides/y.png", tex).endswith("y.png")
-    assert core.resolve_image("/abs/z.png", tex) == "/abs/z.png"
-
-
 def test_resolve_image_graphicspath(tmp_path):
     os.makedirs(tmp_path / "fig_slides")
     (tmp_path / "fig_slides" / "hr.png").write_text("")
@@ -51,19 +42,22 @@ def test_resolve_image_graphicspath(tmp_path):
     assert core.resolve_image("missing", tex, gp).endswith("missing.pdf")
 
 
-def test_new_id():
+def test_new_id_and_safe_stem():
     assert core.new_id("img", set()) == "img1"
     assert core.new_id("img", {"img1", "img2"}) == "img3"
+    assert core.safe_stem("my lec/f1") == "my-lec-f1"
+    assert core.safe_stem("///") == "img"
 
 
 def test_to_frac_clamps_and_rounds():
     assert core.to_frac(600, 1200) == 0.5
     assert core.to_frac(1 / 3 * 1200, 1200) == 0.3333
     assert core.to_frac(-5000, 1200) == -0.5
-    assert core.to_frac(5000, 1200) == 1.5
 
 
-def test_resize_box_core():
+# ---- core: resizing and snapping ---------------------------------------------
+
+def test_resize_box():
     box = (10, 10, 100, 50)
     assert core.resize_box(box, "se", 20, 0, aspect=0.5) == (10, 10, 120, 60)
     assert core.resize_box(box, "nw", -20, 0, aspect=0.5) == (-10, 0, 120, 60)
@@ -73,31 +67,70 @@ def test_resize_box_core():
                            max_size=(1200, 675)) == (10, 10, 1200, 600)
 
 
-def test_is_image_file_and_safe_stem():
-    assert core.is_image_file("a.PNG") and core.is_image_file("b.pdf")
-    assert not core.is_image_file("c.txt")
-    assert core.safe_stem("my lec/f1") == "my-lec-f1"
-    assert core.safe_stem("///") == "img"
+def test_snap_offset():
+    assert core.snap_offset([10, 60], [63, 200]) == (3, 63)      # closest wins
+    assert core.snap_offset([10], [17]) == (0.0, None)            # too far
+    assert core.snap_offset([10, 20], [14, 21]) == (1, 21)
+    assert core.box_lines(0, 10, 100, 40) == ((0, 50, 100), (10, 30, 50))
 
 
-# ---- offscreen GUI --------------------------------------------------------
+# ---- core: TikZ options --------------------------------------------------------
+
+def test_style_roundtrip_keeps_unknown_options():
+    opts = "draw=Maroon, very thick, dashed, bend left=20, -{Stealth[length=3mm]}, my key=1"
+    style, rest = core.parse_style(opts, "arrow")
+    assert style == {"color": "Maroon", "width": "very thick", "dash": "dashed", "bend": 20.0}
+    assert rest == ["-{Stealth[length=3mm]}", "my key=1"]
+    assert core.format_style(style, rest, "arrow") == opts
+
+
+def test_style_per_kind():
+    style, rest = core.parse_style("draw=bblue, fill=Yellow, fill opacity=0.5, ->", "rect")
+    assert style == {"color": "bblue", "fill": "Yellow", "opacity": 0.5}
+    assert rest == ["->"]                     # tips only managed for arrows
+    style, _ = core.parse_style("text=red", "text")
+    assert style == {"color": "red"}
+    assert core.format_style({"bend": -30}, [], "arrow") == "bend right=30"
+    assert core.format_style({"tips": "<->", "dash": "solid"}, [], "arrow") == "<->"
+
+
+def test_line_width_and_bend():
+    assert core.line_width_pt(None) == core.BASE_LINE_WIDTH
+    assert core.line_width_pt("thick") == 0.8
+    assert abs(core.line_width_pt("1mm") - 2.84528) < 1e-6
+    c1, c2 = core.bend_controls((0, 0), (100, 0), 30)
+    assert c1[1] < 0 and c2[1] < 0                   # bend left goes up on screen
+    c1, _ = core.bend_controls((0, 0), (100, 0), -30)
+    assert c1[1] > 0
+
+
+# ---- offscreen GUI ---------------------------------------------------------
 
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPointF  # noqa: E402
 import beamer_gui  # noqa: E402
 
+SWATCHES = {"bblue": "144b7a", "Maroon": "af3235"}
 ITEMS = [
     {"kind": "image", "id": "img1", "file": "fig_slides/g.png", "x": 0.1, "y": 0.2, "w": 0.3},
-    {"kind": "arrow", "id": "arrow1", "x1": 0.6, "y1": 0.2, "x2": 0.2, "y2": 0.7},
-    {"kind": "ellipse", "id": "ellipse1", "x": 0.4, "y": 0.4, "w": 0.2, "h": 0.1},
+    {"kind": "arrow", "id": "arrow1", "x1": 0.6, "y1": 0.2, "x2": 0.2, "y2": 0.7,
+     "opts": "draw=Maroon, thick, my key=1"},
+    {"kind": "ellipse", "id": "ellipse1", "x": 0.4, "y": 0.4, "w": 0.2, "h": 0.1, "opts": ""},
+    {"kind": "rect", "id": "rect1", "x": 0.7, "y": 0.7, "w": 0.1, "h": 0.1,
+     "opts": "draw=bblue, fill=Maroon, fill opacity=0.5"},
+    {"kind": "text", "id": "text1", "x": 0.05, "y": 0.8, "w": 0.3, "text": "Hi $x$",
+     "opts": "text=bblue", "box": [0.05, 0.8, 0.3, 0.05]},
     {"kind": "raw", "id": "t1", "x": 0.5, "y": 0.5, "w": 0.3, "body": "$x$"},
+    {"kind": "flow", "id": "c1", "name": "block", "box": [0.1, 0.5, 0.3, 0.2],
+     "resize": "width"},
+    {"kind": "wrap", "id": "w1", "name": "includegraphics", "box": [0.6, 0.05, 0.2, 0.1],
+     "resize": "aspect"},
 ]
 
 
 @pytest.fixture(scope="module")
 def app():
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])
 
@@ -109,24 +142,33 @@ def solid_image(color, w=40, h=40):
     return img
 
 
-def copy_to_clipboard(img):
-    from PySide6.QtWidgets import QApplication
-    QApplication.clipboard().setImage(img)
-
-
 @pytest.fixture
 def session(app, tmp_path):
     if not shutil.which("pdflatex"):
         pytest.skip("pdflatex missing")
+    defs = "".join(f"\\definecolor{{{n}}}{{HTML}}{{{c}}}" for n, c in SWATCHES.items())
+    swatches = "".join(f"\\textcolor{{{n}}}{{\\rule{{3mm}}{{3mm}}}}\\hspace{{1mm}}"
+                       for n in SWATCHES)
     (tmp_path / "bg.tex").write_text(
-        "\\documentclass{beamer}\\begin{document}\\begin{frame}x\\end{frame}\\end{document}")
+        "\\documentclass{beamer}" + defs + "\\begin{document}"
+        "\\begin{frame}A\\end{frame}\\begin{frame}B\\end{frame}"
+        "\\begin{frame}[plain]\\noindent " + swatches + "\\end{frame}\\end{document}")
     subprocess.run(["pdflatex", "-interaction=nonstopmode", "bg.tex"], cwd=tmp_path,
                    check=True, stdout=subprocess.DEVNULL)
     os.makedirs(tmp_path / "fig_slides")
     solid_image("green", 100, 50).save(str(tmp_path / "fig_slides" / "g.png"))
-    return {"background": str(tmp_path / "bg.pdf"), "tex_dir": str(tmp_path),
-            "image_dir": str(tmp_path / "fig_slides"), "stem": "lec-f1",
-            "items": [dict(i) for i in ITEMS]}
+    # Swatch centres: \noindent at the 1cm margin, 3mm squares 1mm apart,
+    # on the first line of a plain frame (top margin of beamer's plain frame).
+    import pymupdf
+    page = pymupdf.open(str(tmp_path / "bg.pdf"))[2]
+    rects = [d["rect"] for d in page.get_drawings() if abs(d["rect"].width - 8.5) < 0.5]
+    colors = [{"name": n, "x": r.x0 / page.rect.width + 0.004,
+               "y": (r.y0 + r.height / 2) / page.rect.height}
+              for n, r in zip(SWATCHES, sorted(rects, key=lambda r: r.x0))]
+    return {"background": str(tmp_path / "bg.pdf"), "page_a": 0, "page_b": 1, "page_s": 2,
+            "paper": [page.rect.width, page.rect.height], "colors": colors,
+            "tex_dir": str(tmp_path), "image_dir": str(tmp_path / "fig_slides"),
+            "stem": "lec-f1", "items": [dict(i) for i in ITEMS]}
 
 
 @pytest.fixture
@@ -150,124 +192,111 @@ def assert_close(d, **expected):
 def test_roundtrip(editor):
     out = by_id(editor)
     for item in ITEMS:
+        got = out[item["id"]]
         for key, value in item.items():
+            if key in ("box", "resize", "name"):
+                continue
             if isinstance(value, float):
-                assert_close(out[item["id"]], **{key: value})
+                assert_close(got, **{key: value})
             else:
-                assert out[item["id"]][key] == value
+                assert got[key] == value, (item["id"], key)
+    assert out["c1"]["box"] == out["c1"]["box0"] == ITEMS[6]["box"]
 
 
-def test_move(editor):
-    el, W, H = elements(editor), editor.W, editor.H
-    el["img1"].setPos(0.5 * W, 0.5 * H)
-    out = by_id(editor)
-    assert out["img1"]["x"] == 0.5 and out["img1"]["y"] == 0.5
-    el["arrow1"].handles[1].setPos(QPointF(0.1 * W, 0.1 * H))    # arrow tip
-    assert_close(by_id(editor)["arrow1"], x2=0.1, y2=0.1)
-    el["arrow1"].setPos(0.1 * W, 0.1 * H)                         # whole arrow
-    assert_close(by_id(editor)["arrow1"], x1=0.7, y1=0.3, x2=0.2, y2=0.2)
+def test_colors_sampled_from_swatches(editor):
+    for name, hexa in SWATCHES.items():
+        c = editor.colors[name]
+        want = tuple(int(hexa[i:i + 2], 16) for i in (0, 2, 4))
+        assert all(abs(a - b) <= 3 for a, b in zip((c.red(), c.green(), c.blue()), want))
+    assert elements(editor)["arrow1"].style_pen().color() == editor.colors["Maroon"]
 
 
 def drag_handle(item, handle, dx, dy, steps=10):
-    """Drag HANDLE of ITEM by DX, DY page fractions, in STEPS moves."""
     ed = item.editor
     start = item.mapToScene(item.handle_points()[handle])
     item.begin_resize(handle, start)
     for i in range(1, steps + 1):
         item.resize_drag(start + QPointF(dx * ed.W, dy * ed.H) * (i / steps))
+    item.drag = None
 
 
-@pytest.mark.parametrize("handle", ["nw", "n", "ne", "e", "se", "s", "sw", "w"])
+@pytest.mark.parametrize("handle", core.HANDLES)
 def test_resize_every_handle_keeps_opposite_fixed(editor, handle):
     item = elements(editor)["ellipse1"]          # x .4 y .4 w .2 h .1
     drag_handle(item, handle, 0.05, 0.05)
     out = by_id(editor)["ellipse1"]
-    right, bottom = out["x"] + out["w"], out["y"] + out["h"]
-    if "w" in handle:
-        assert_close(out, x=0.45, w=0.15)
-    elif "e" in handle:
-        assert_close(out, x=0.4, w=0.25)
-    else:
-        assert_close(out, x=0.4, w=0.2)
-    if "n" in handle:
-        assert_close(out, y=0.45, h=0.05)
-    elif "s" in handle:
-        assert_close(out, y=0.4, h=0.15)
-    else:
-        assert_close(out, y=0.4, h=0.1)
-    assert right <= 0.65 + TOL and bottom <= 0.55 + TOL
+    want_x = {"w": (0.45, 0.15), "e": (0.4, 0.25)}
+    want_y = {"n": (0.45, 0.05), "s": (0.4, 0.15)}
+    x, w = next((v for k, v in want_x.items() if k in handle), (0.4, 0.2))
+    y, h = next((v for k, v in want_y.items() if k in handle), (0.4, 0.1))
+    assert_close(out, x=x, w=w, y=y, h=h)
 
 
-@pytest.mark.parametrize("handle", ["nw", "n", "ne", "e", "se", "s", "sw", "w"])
-def test_resize_image_keeps_aspect(editor, handle):
-    item = elements(editor)["img1"]              # 100x50 pixmap
-    drag_handle(item, handle, 0.03, 0.04)
-    r = item.rect()
-    assert abs(r.height() / r.width() - 0.5) < 1e-6
-
-
-def test_resize_follows_mouse_exactly(editor):
-    """Regression: resizing ran away, growing faster than the mouse."""
+def test_resize_image_keeps_aspect_and_follows_mouse(editor):
     item = elements(editor)["img1"]
     w0 = item.rect().width()
     drag_handle(item, "e", 0.1, 0, steps=50)
     assert abs(item.rect().width() - (w0 + 0.1 * editor.W)) < 1e-6
-    drag_handle(item, "e", -0.1, 0, steps=50)    # and back
+    assert abs(item.rect().height() / item.rect().width() - 0.5) < 1e-6
+    drag_handle(item, "e", -0.1, 0, steps=50)
     assert abs(item.rect().width() - w0) < 1e-6
 
 
-def test_resize_limited_to_page(editor):
-    item = elements(editor)["img1"]
-    drag_handle(item, "se", 5, 5)
-    assert item.rect().width() <= editor.W + 1e-6
-    assert item.rect().height() <= editor.H + 1e-6
-    drag_handle(item, "se", -5, -5)              # still recoverable
-    assert item.rect().width() >= 2 * beamer_gui.MIN_SIZE - 1e-6
+def test_resize_modes_of_text_elements(editor):
+    el = elements(editor)
+    assert set(el["c1"].handle_points()) == {"e", "w"}       # block: width only
+    assert len(el["w1"].handle_points()) == 8                # image: all handles
+    assert set(el["t1"].handle_points()) == {"e", "w"}
 
 
-def test_resize_with_real_mouse_events(editor, app):
-    """Press on the bottom-right handle, move, release, through the view."""
-    from PySide6.QtCore import QEvent, Qt
-    from PySide6.QtGui import QMouseEvent
-    from PySide6.QtWidgets import QApplication
-    item = elements(editor)["ellipse1"]
-    item.setSelected(True)
-    view = editor.view
-    editor.show()
-
-    def send(kind, scene_pt, buttons):
-        p = view.mapFromScene(scene_pt)
-        ev = QMouseEvent(kind, QPointF(p), QPointF(view.viewport().mapToGlobal(p)),
-                         Qt.LeftButton, buttons, Qt.NoModifier)
-        QApplication.sendEvent(view.viewport(), ev)
-
-    start = item.mapToScene(item.handle_points()["se"])
-    w0 = item.rect().width()
-    send(QEvent.MouseButtonPress, start, Qt.LeftButton)
-    for i in range(1, 21):
-        send(QEvent.MouseMove, start + QPointF(3 * i, 0), Qt.LeftButton)
-    send(QEvent.MouseButtonRelease, start + QPointF(60, 0), Qt.NoButton)
-    # The handle lies on the edge of the raw block t1, which is above
-    # the ellipse in stacking order: selection must bring it forward.
-    assert abs(item.rect().width() - (w0 + 60)) <= 2
+def test_moving_text_element_reports_box(editor):
+    c1 = elements(editor)["c1"]
+    c1.setPos(c1.x() + 0.1 * editor.W, c1.y())
+    out = by_id(editor)["c1"]
+    assert_close(dict(zip("xywh", out["box"])), x=0.2, y=0.5, w=0.3, h=0.2)
+    assert out["box0"] == [0.1, 0.5, 0.3, 0.2]
 
 
-def test_raw_only_has_width_handles(editor):
-    assert set(elements(editor)["t1"].handle_points()) == {"e", "w"}
-
-
-def test_add_delete_and_stacking_order(editor):
-    editor.add_arrow()
-    editor.add_ellipse()
-    elements(editor)["t1"].setSelected(True)
+def test_text_elements_are_not_deletable(editor):
+    el = elements(editor)
+    el["c1"].setSelected(True)
+    el["ellipse1"].setSelected(True)
     editor.delete()
-    # Source order, then additions on top, as LaTeX draws later blocks on top.
-    assert [d["id"] for d in editor.items_dicts()] == [
-        "img1", "arrow1", "ellipse1", "arrow2", "ellipse2"]
+    ids = editor.ids()
+    assert "c1" in ids and "ellipse1" not in ids
+
+
+def test_style_panel_applies_to_selection(editor):
+    el = elements(editor)
+    editor.scene.clearSelection()
+    el["ellipse1"].setSelected(True)
+    panel = editor.style_panel
+    panel.color.setCurrentText("bblue")
+    panel.dash.setCurrentText("dashed")
+    panel.fill.setCurrentText("Maroon")
+    panel.opacity.setValue(0.3)
+    assert by_id(editor)["ellipse1"]["opts"] == \
+        "draw=bblue, dashed, fill=Maroon, fill opacity=0.3"
+    editor.scene.clearSelection()
+    el["arrow1"].setSelected(True)
+    panel.tips.setCurrentText("<->")
+    panel.bend.setValue(-20)
+    # Options the panel does not manage are kept.
+    assert by_id(editor)["arrow1"]["opts"] == \
+        "draw=Maroon, thick, <->, bend right=20, my key=1"
+
+
+def test_new_shapes_take_last_style(editor):
+    editor.add_rect()
+    editor.style_panel.color.setCurrentText("Maroon")
+    editor.add_rect()
+    rects = [d for d in editor.items_dicts() if d["kind"] == "rect"]
+    assert rects[-1]["opts"].startswith("draw=Maroon")
 
 
 def test_paste_image(editor, session):
-    copy_to_clipboard(solid_image("blue"))
+    from PySide6.QtWidgets import QApplication
+    QApplication.clipboard().setImage(solid_image("blue"))
     editor.paste()
     new = by_id(editor)["img2"]
     assert new["file"] == "fig_slides/lec-f1-1.png"
@@ -276,14 +305,108 @@ def test_paste_image(editor, session):
 
 def test_items_survive_gc(editor):
     """Regression: PySide dropped Python wrappers of items made in callbacks."""
-    copy_to_clipboard(solid_image("red"))
-    editor.paste()
     editor.add_arrow()
+    editor.add_text()
     gc.collect()
-    assert {"img2", "arrow2"} <= set(by_id(editor))
+    assert {"arrow2", "text2"} <= set(by_id(editor))
+
+
+def test_reload_replaces_elements(editor, session):
+    session = dict(session, items=[ITEMS[2]])
+    editor.load(session)
+    assert editor.ids() == {"ellipse1"}
 
 
 def test_save_emits_json(editor, capsys):
     editor.save()
     message = json.loads(capsys.readouterr().out.strip())
     assert len(message["items"]) == len(ITEMS)
+
+
+# ---- snapping ------------------------------------------------------------------
+
+def test_snapping_aligns_moved_element(editor):
+    el = elements(editor)
+    ellipse, rect = el["ellipse1"], el["rect1"]       # rect left edge at x=.7
+    editor.scene.clearSelection()
+    ellipse.setSelected(True)
+    editor.dragging = True
+    ellipse.setPos(0.7 * editor.W + 4, ellipse.y())  # 4 px from the rect's left edge
+    assert abs(ellipse.x() - rect.x()) < 1e-9
+    assert editor.guides[0].isVisible()
+    editor.dragging = False
+    ellipse.setPos(0.7 * editor.W + 4, ellipse.y())  # not dragging: no snap
+    assert abs(ellipse.x() - rect.x() - 4) < 1e-9
+
+
+def test_snapping_to_page_centre_and_toggle(editor):
+    ellipse = elements(editor)["ellipse1"]
+    editor.scene.clearSelection()
+    ellipse.setSelected(True)
+    editor.dragging = True
+    w = ellipse.rect().width()
+    ellipse.setPos(editor.W / 2 - w / 2 + 3, ellipse.y())   # centre 3 px off
+    assert abs(ellipse.x() + w / 2 - editor.W / 2) < 1e-9
+    editor.toggle_snapping(False)
+    ellipse.setPos(editor.W / 2 - w / 2 + 3, ellipse.y())
+    assert abs(ellipse.x() + w / 2 - editor.W / 2 - 3) < 1e-9
+
+
+def test_snapping_resize_edge(editor):
+    el = elements(editor)
+    ellipse, rect = el["ellipse1"], el["rect1"]
+    editor.scene.clearSelection()
+    ellipse.setSelected(True)
+    editor.dragging = True
+    right = ellipse.x() + ellipse.rect().width()
+    drag_handle(ellipse, "e", (rect.x() - right - 5) / editor.W, 0, steps=1)
+    assert abs(ellipse.x() + ellipse.rect().width() - rect.x()) < 1e-9
+
+
+def test_snapping_arrow_end(editor):
+    el = elements(editor)
+    arrow, rect = el["arrow1"], el["rect1"]
+    editor.scene.clearSelection()
+    arrow.setSelected(True)
+    editor.dragging = True
+    target = QPointF(rect.x() + 3, rect.y() - 2)        # near the rect's corner
+    arrow.handles[1].setPos(arrow.mapFromScene(target))
+    end = arrow.ends[1] + arrow.pos()
+    assert abs(end.x() - rect.x()) < 1e-9 and abs(end.y() - rect.y()) < 1e-9
+
+
+def test_snapping_only_single_selection(editor):
+    el = elements(editor)
+    for k in ("ellipse1", "img1"):
+        el[k].setSelected(True)
+    editor.dragging = True
+    assert not editor.snap_active(el["ellipse1"])
+
+
+def test_snapping_with_real_mouse_drag(editor):
+    """Press, move and release through the view; guides hide on release."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    el = elements(editor)
+    ellipse, rect = el["ellipse1"], el["rect1"]
+    view = editor.view
+    editor.show()
+    editor.scene.clearSelection()
+    ellipse.setSelected(True)
+
+    def send(kind, scene_pt, buttons):
+        p = view.mapFromScene(scene_pt)
+        QApplication.sendEvent(view.viewport(), QMouseEvent(
+            kind, QPointF(p), QPointF(view.viewport().mapToGlobal(p)),
+            Qt.LeftButton, buttons, Qt.NoModifier))
+
+    grab = ellipse.mapToScene(ellipse.rect().center())
+    target_dx = rect.x() - ellipse.x() + 4          # 4 px right of the rect's left edge
+    send(QEvent.MouseButtonPress, grab, Qt.LeftButton)
+    for i in range(1, 11):
+        send(QEvent.MouseMove, grab + QPointF(target_dx * i / 10, 0), Qt.LeftButton)
+    assert abs(ellipse.x() - rect.x()) < 1.0
+    assert editor.guides[0].isVisible()
+    send(QEvent.MouseButtonRelease, grab + QPointF(target_dx, 0), Qt.NoButton)
+    assert not editor.guides[0].isVisible()

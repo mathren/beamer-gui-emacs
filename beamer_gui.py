@@ -6,10 +6,13 @@ Usage: beamer_gui.py SESSION.json
 SESSION.json is written by beamer-gui.el.  Protocol with Emacs, one
 JSON object per line:
 
-  stdout  {"items": [...]}        on save, elements in stacking order
-  stdin   {"background": "a.pdf"} after Emacs has recompiled the frame
+  stdout  {"items": [...]}            on save, elements in stacking order
+  stdin   {"session": "new.json"}     after Emacs rewrote and recompiled
 
-Element coordinates are fractions of the page, origin at the top left.
+The frame PDF has the frame twice: page_a with every element (used
+to crop pictures of elements of the text), page_b without them (the
+background), and page_s with colour swatches.  Element coordinates
+are fractions of the page, origin at the top left.
 """
 import json
 import os
@@ -17,24 +20,26 @@ import shutil
 import sys
 
 import pymupdf
-from PySide6.QtCore import QPointF, QRectF, QSocketNotifier, Qt
-from PySide6.QtGui import (QAction, QBrush, QColor, QImage, QKeySequence, QPainter,
-                           QPainterPath, QPen, QPixmap, QPolygonF)
-from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem,
-                               QGraphicsPixmapItem, QGraphicsRectItem,
-                               QGraphicsScene, QGraphicsView, QMainWindow,
-                               QToolBar)
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSocketNotifier, Qt
+from PySide6.QtGui import (QAction, QBrush, QColor, QIcon, QImage, QKeySequence,
+                           QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
+from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QDoubleSpinBox,
+                               QFormLayout, QGraphicsItem, QGraphicsPathItem,
+                               QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene,
+                               QGraphicsView, QInputDialog, QMainWindow, QToolBar,
+                               QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import beamer_gui_core as core  # noqa: E402
 
 SCENE_WIDTH = 1200.0            # pixels of the rendered page
-SHAPE_PEN = QPen(QColor("red"), 3)
 HANDLE_COLOR = QColor("#1e88e5")
-RAW_HEIGHT = 40                 # textblock heights are unknown: fixed box
+DEFAULT_DRAW = QColor("red")
+PLACEHOLDER_HEIGHT = 40         # pixels, for elements not measured yet
 MIN_SIZE = 5
 HANDLE = 9                      # handle side, pixels
 PAGE_MARGIN = 0.25              # scrollable margin around the page, fraction
+ARROW_HEAD = 4.0                # arrow head length, in line widths
 
 
 # ---- rendering ------------------------------------------------------------
@@ -79,6 +84,15 @@ class Handle(QGraphicsRectItem):
         self.setZValue(10)
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and not self.placing:
+            editor = self.parentItem().editor
+            if editor.snap_active(self.parentItem()):
+                point = self.parentItem().mapToScene(value)
+                xs, ys = editor.snap_lines(exclude=self.parentItem())
+                dx, tx = core.snap_offset([point.x()], xs)
+                dy, ty = core.snap_offset([point.y()], ys)
+                editor.show_guides(tx, ty)
+                return value + QPointF(dx, dy)
         if change == QGraphicsItem.ItemPositionHasChanged and not self.placing:
             self.on_move(self.scenePos())
         return super().itemChange(change, value)
@@ -93,46 +107,66 @@ class Handle(QGraphicsRectItem):
 class Element:
     """Behaviour shared by all elements; mixed into a QGraphicsItem.
 
-    Subclasses define KIND and geometry() (the kind-specific fields,
-    as page fractions)."""
+    Subclasses define KIND and to_dict()."""
 
     kind = None
+    deletable = True            # elements of the user's text are not
+    styled = False              # has colour and line options
 
     def setup(self, editor, data):
         self.editor = editor
         self.id = data["id"]
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable
                       | QGraphicsItem.ItemSendsGeometryChanges)
-        if "x" in data:
-            self.setPos(editor.to_scene(data["x"], data["y"]))
+        if self.styled:
+            self.style, self.rest = core.parse_style(data.get("opts", ""), self.kind)
+
+    def options(self):
+        return core.format_style(self.style, self.rest, self.kind)
+
+    def style_pen(self):
+        ed = self.editor
+        color = ed.color(self.style.get("color"), DEFAULT_DRAW)
+        pen = QPen(color, core.line_width_pt(self.style.get("width")) * ed.px_per_pt)
+        dash = self.style.get("dash", "solid")
+        if "dot" in dash and "dash" not in dash:
+            pen.setStyle(Qt.DotLine)
+        elif dash == "dash dot":
+            pen.setStyle(Qt.DashDotLine)
+        elif "dash" in dash:
+            pen.setStyle(Qt.DashLine)
+        pen.setCapStyle(Qt.FlatCap)
+        return pen
 
     def frac_pos(self):
         return self.editor.to_frac(self.pos())
 
-    def to_dict(self):
-        return {"kind": self.kind, "id": self.id, **self.geometry()}
-
 
 class BoxItem(QGraphicsRectItem, Element):
-    """Element drawn in its rectangle, resized by 8 handles when selected.
+    """Element drawn in its rectangle, resized by handles when selected.
 
     A drag moves the opposite side or corner by exactly the mouse
     displacement since the press, so resizing cannot run away.  Sizes
-    are limited to the page.  Subclasses set ASPECT_LOCKED, HANDLES and
-    draw_content(painter, rect)."""
+    are limited to the page.  RESIZE is "free", "aspect" (keep the
+    aspect ratio), "width" (left and right handles only) or "none".
+    Subclasses define draw_content(painter, rect)."""
 
-    aspect_locked = False
-    handles = core.HANDLES
+    resize = "free"
     CURSORS = {"nw": Qt.SizeFDiagCursor, "se": Qt.SizeFDiagCursor,
                "ne": Qt.SizeBDiagCursor, "sw": Qt.SizeBDiagCursor,
                "n": Qt.SizeVerCursor, "s": Qt.SizeVerCursor,
                "e": Qt.SizeHorCursor, "w": Qt.SizeHorCursor}
 
-    def __init__(self, editor, data, width, height):
+    def __init__(self, editor, data, x, y, width, height):
         super().__init__(0, 0, width, height)
-        self.setup(editor, data)
-        self.setAcceptHoverEvents(True)
         self.drag = None            # (handle, start box, press scene pos)
+        self.setup(editor, data)
+        self.setPos(x, y)
+        self.setAcceptHoverEvents(True)
+
+    @property
+    def handles(self):
+        return {"none": (), "width": ("e", "w")}.get(self.resize, core.HANDLES)
 
     # geometry
     def box(self):
@@ -143,9 +177,16 @@ class BoxItem(QGraphicsRectItem, Element):
         self.setPos(x, y)
         self.setRect(0, 0, w, h)
 
+    def frac_box(self):
+        (x, y), (w, h) = self.editor.to_frac(self.pos()), self.frac_size()
+        return [x, y, w, h]
+
+    def frac_size(self):
+        return self.editor.to_frac(self.rect().bottomRight())
+
     def aspect(self):
         r = self.rect()
-        return r.height() / r.width() if self.aspect_locked else None
+        return r.height() / r.width() if self.resize == "aspect" else None
 
     def handle_points(self):
         r = self.rect()
@@ -170,11 +211,41 @@ class BoxItem(QGraphicsRectItem, Element):
     def resize_drag(self, scene_pos):
         handle, start, press = self.drag
         d = scene_pos - press
+        if self.editor.snap_active(self):
+            d = self.snap_resize(handle, start, d)
         self.set_box(*core.resize_box(start, handle, d.x(), d.y(), aspect=self.aspect(),
                                       min_size=MIN_SIZE * 2,
                                       max_size=(self.editor.W, self.editor.H)))
 
+    def snap_resize(self, handle, start, d):
+        """Return the drag D adjusted so the moving edges snap."""
+        x, y, w, h = start
+        xs, ys = self.editor.snap_lines(exclude=self)
+        dx = dy = 0.0
+        tx = ty = None
+        if "w" in handle or "e" in handle:
+            edge = x + d.x() if "w" in handle else x + w + d.x()
+            dx, tx = core.snap_offset([edge], xs)
+        if "n" in handle or "s" in handle:
+            edge = y + d.y() if "n" in handle else y + h + d.y()
+            dy, ty = core.snap_offset([edge], ys)
+        self.editor.show_guides(tx, ty)
+        return d + QPointF(dx, dy)
+
+    def snapped_position(self, pos):
+        """Return POS moved so that one of the box lines snaps."""
+        r = self.rect()
+        lines_x, lines_y = core.box_lines(pos.x(), pos.y(), r.width(), r.height())
+        xs, ys = self.editor.snap_lines(exclude=self)
+        dx, tx = core.snap_offset(lines_x, xs)
+        dy, ty = core.snap_offset(lines_y, ys)
+        self.editor.show_guides(tx, ty)
+        return pos + QPointF(dx, dy)
+
     def itemChange(self, change, value):
+        if (change == QGraphicsItem.ItemPositionChange and not self.drag
+                and self.editor.snap_active(self)):
+            return self.snapped_position(value)
         # A selected element comes to the front, so its handles can be
         # grabbed even where another element overlaps them.
         if change == QGraphicsItem.ItemSelectedHasChanged:
@@ -186,6 +257,7 @@ class BoxItem(QGraphicsRectItem, Element):
         return self.rect().adjusted(-HANDLE, -HANDLE, HANDLE, HANDLE)
 
     def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
         self.draw_content(painter, self.rect())
         if self.isSelected():
             painter.setPen(QPen(HANDLE_COLOR, 1, Qt.DashLine))
@@ -224,142 +296,487 @@ class BoxItem(QGraphicsRectItem, Element):
         else:
             super().mouseReleaseEvent(event)
 
-    def frac_size(self):
-        return self.editor.to_frac(self.rect().bottomRight())
-
 
 class ImageItem(BoxItem):
-    """Image; height follows width, as \\includegraphics[width=...] does."""
+    """Image added in the GUI; height follows width, as \\includegraphics does."""
     kind = "image"
-    aspect_locked = True
+    resize = "aspect"
 
     def __init__(self, editor, data):
         self.file = data["file"]
         path = core.resolve_image(self.file, editor.tex_dir, editor.graphics_path)
         self.pixmap = load_pixmap(path) or placeholder_pixmap()
         width = data["w"] * editor.W
-        super().__init__(editor, data, width,
+        x, y = editor.to_scene(data["x"], data["y"]).toTuple()
+        super().__init__(editor, data, x, y, width,
                          width * self.pixmap.height() / self.pixmap.width())
 
     def draw_content(self, painter, rect):
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.drawPixmap(rect, self.pixmap, QRectF(self.pixmap.rect()))
 
-    def geometry(self):
+    def to_dict(self):
         x, y = self.frac_pos()
-        return {"file": self.file, "x": x, "y": y, "w": self.frac_size()[0]}
+        return {"kind": "image", "id": self.id, "file": self.file,
+                "x": x, "y": y, "w": self.frac_size()[0]}
 
 
-class EllipseItem(BoxItem):
-    kind = "ellipse"
+class ShapeItem(BoxItem):
+    """Ellipse or rectangle with colour, line and fill options."""
+    styled = True
 
     def __init__(self, editor, data):
-        super().__init__(editor, data, data["w"] * editor.W, data["h"] * editor.H)
+        x, y = editor.to_scene(data["x"], data["y"]).toTuple()
+        super().__init__(editor, data, x, y, data["w"] * editor.W, data["h"] * editor.H)
+
+    def brush(self):
+        fill = self.style.get("fill")
+        if not fill:
+            return Qt.NoBrush
+        color = QColor(self.editor.color(fill, QColor("gray")))
+        color.setAlphaF(self.style.get("opacity", 1.0))
+        return QBrush(color)
 
     def draw_content(self, painter, rect):
-        painter.setPen(SHAPE_PEN)
-        painter.setBrush(Qt.NoBrush)
+        painter.setPen(self.style_pen())
+        painter.setBrush(self.brush())
+        self.draw_shape(painter, rect)
+
+    def to_dict(self):
+        (x, y), (w, h) = self.frac_pos(), self.frac_size()
+        return {"kind": self.kind, "id": self.id, "x": x, "y": y, "w": w, "h": h,
+                "opts": self.options()}
+
+
+class EllipseItem(ShapeItem):
+    kind = "ellipse"
+
+    def draw_shape(self, painter, rect):
         painter.drawEllipse(rect)
 
-    def geometry(self):
-        (x, y), (w, h) = self.frac_pos(), self.frac_size()
-        return {"x": x, "y": y, "w": w, "h": h}
+
+class RectItem(ShapeItem):
+    kind = "rect"
+
+    def draw_shape(self, painter, rect):
+        painter.drawRect(rect)
 
 
 class ArrowItem(QGraphicsPathItem, Element):
-    """Arrow from P1 to P2 (local coordinates), one handle per end."""
+    """Arrow between two ends (local coordinates), one handle per end."""
     kind = "arrow"
+    styled = True
 
     def __init__(self, editor, data):
         super().__init__()
         self.setup(editor, data)
-        self.setPen(SHAPE_PEN)
-        self.setBrush(QBrush(SHAPE_PEN.color()))
         self.ends = [editor.to_scene(data["x1"], data["y1"]),
                      editor.to_scene(data["x2"], data["y2"])]
         self.handles = [Handle(self, lambda p, i=i: self.move_end(i, p)) for i in (0, 1)]
+        for handle in self.handles:
+            handle.hide()               # shown while the arrow is selected
         self.rebuild()
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemSelectedHasChanged:
+            for handle in self.handles:
+                handle.setVisible(bool(value))
+            self.setZValue(1 if value else 0)
+        return super().itemChange(change, value)
 
     def move_end(self, index, scene_pos):
         self.ends[index] = scene_pos - self.pos()
         self.rebuild()
 
-    def rebuild(self):
-        start, tip = self.ends
-        v = tip - start
+    def head(self, tip, toward, pen):
+        """Return the arrow head polygon at TIP, pointing away from TOWARD."""
+        v = tip - toward
         n = max((v.x() ** 2 + v.y() ** 2) ** 0.5, 1e-6)
         along, across = v / n, QPointF(-v.y() / n, v.x() / n)
-        base = tip - along * 14
+        size = max(pen.widthF() * ARROW_HEAD, 8)
+        base = tip - along * size
+        return QPolygonF([tip, base + across * size / 2, base - across * size / 2, tip])
+
+    def rebuild(self):
+        start, end = self.ends
+        pen = self.style_pen()
+        bend = self.style.get("bend")
         path = QPainterPath(start)
-        path.lineTo(tip)
-        path.addPolygon(QPolygonF([tip, base + across * 6, base - across * 6, tip]))
+        if bend:
+            c1, c2 = (QPointF(*c) for c in core.bend_controls(start.toTuple(),
+                                                              end.toTuple(), bend))
+            path.cubicTo(c1, c2, end)
+        else:
+            c1, c2 = start, end
+            path.lineTo(end)
+        tips = self.style.get("tips", "->")
+        self.setPen(pen)
+        self.setBrush(Qt.NoBrush)
+        heads = QPainterPath()
+        if tips in ("->", "<->"):
+            heads.addPolygon(self.head(end, c2, pen))
+        if tips in ("<-", "<->"):
+            heads.addPolygon(self.head(start, c1, pen))
+        self.heads = heads
         self.setPath(path)
-        for handle, end in zip(self.handles, self.ends):
-            handle.place(end)
+        for handle, p in zip(self.handles, self.ends):
+            handle.place(p)
 
-    def geometry(self):
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
+        super().paint(painter, option, widget)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.style_pen().color())
+        painter.drawPath(self.heads)
+
+    def boundingRect(self):
+        return super().boundingRect().united(self.heads.boundingRect()).adjusted(-2, -2, 2, 2)
+
+    def update_style(self):
+        self.rebuild()
+        self.update()
+
+    def to_dict(self):
         (x1, y1), (x2, y2) = (self.editor.to_frac(e + self.pos()) for e in self.ends)
-        return {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+        return {"kind": "arrow", "id": self.id, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "opts": self.options()}
 
 
-class RawItem(BoxItem):
-    """Any other tagged block: drawn in the background, only moved and
-    narrowed or widened here (its height is set by its content)."""
+class CropItem(BoxItem):
+    """Element shown by its picture cropped from the measured page.
+
+    Used for elements of the user's text ("flow", "textblock"), moved
+    ones ("wrap"), and blocks drawn by LaTeX ("text", "raw").  Without
+    a measured box (a new text) a placeholder is drawn."""
+
+    deletable = False
+
+    def __init__(self, editor, data, x, y, w, h):
+        self.label = data.get("name") or self.kind
+        super().__init__(editor, data, x, y, w, h)
+        self.picture = editor.crop(data["box"]) if data.get("box") else None
+
+    @classmethod
+    def from_box(cls, editor, data):
+        x, y, w, h = data["box"]
+        self = cls(editor, data, x * editor.W, y * editor.H, w * editor.W, h * editor.H)
+        self.box0 = list(data["box"])
+        self.resize = data.get("resize", "none")
+        return self
+
+    def draw_content(self, painter, rect):
+        if self.picture is not None:
+            painter.drawPixmap(rect, self.picture, QRectF(self.picture.rect()))
+        else:
+            painter.setPen(QPen(HANDLE_COLOR, 1, Qt.DashLine))
+            painter.drawRect(rect)
+            painter.drawText(rect.adjusted(4, 2, -2, -2), Qt.AlignLeft | Qt.TextWordWrap,
+                             self.placeholder_text())
+        if self.isSelected() or self.picture is None:
+            painter.setPen(HANDLE_COLOR)
+            painter.drawText(rect.adjusted(0, -16, 0, 0), Qt.AlignLeft | Qt.AlignTop,
+                             self.label)
+
+    def placeholder_text(self):
+        return self.label
+
+    def boundingRect(self):
+        return super().boundingRect().adjusted(0, -18, 0, 0)
+
+    def to_dict(self):
+        return {"kind": self.kind, "id": self.id, "name": self.label,
+                "box": self.frac_box(), "box0": self.box0}
+
+
+class FlowItem(CropItem):
+    kind = "flow"
+
+
+class WrapItem(CropItem):
+    kind = "wrap"
+
+
+class TextblockItem(CropItem):
+    kind = "textblock"
+
+
+class RawItem(CropItem):
+    """Block written by beamer-gui that the editor does not interpret."""
     kind = "raw"
-    handles = ("e", "w")
+    deletable = True
 
     def __init__(self, editor, data):
         self.body = data["body"]
-        super().__init__(editor, data, data["w"] * editor.W, RAW_HEIGHT)
+        x, y = editor.to_scene(data["x"], data["y"]).toTuple()
+        h = data["box"][3] * editor.H if data.get("box") else PLACEHOLDER_HEIGHT
+        super().__init__(editor, data, x, y, data["w"] * editor.W, h)
+        self.resize = "width"
 
-    def draw_content(self, painter, rect):
-        painter.setPen(QPen(HANDLE_COLOR, 1, Qt.DashLine))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRect(rect)
-        painter.setPen(HANDLE_COLOR)
-        painter.drawText(rect.adjusted(4, 2, 0, 0), Qt.AlignLeft | Qt.AlignTop, self.id)
-
-    def geometry(self):
+    def to_dict(self):
         x, y = self.frac_pos()
-        return {"body": self.body, "x": x, "y": y, "w": self.frac_size()[0]}
+        return {"kind": self.kind, "id": self.id, "x": x, "y": y,
+                "w": self.frac_size()[0], "body": self.body}
 
 
-KINDS = {cls.kind: cls for cls in (ImageItem, EllipseItem, ArrowItem, RawItem)}
+class TextItem(RawItem):
+    """Text set by LaTeX in a TikZ node; double-click to edit it."""
+    kind = "text"
+    styled = True
+
+    def __init__(self, editor, data):
+        self.text = data.get("text", "Text")
+        super().__init__(editor, dict(data, body=""), )
+
+    def placeholder_text(self):
+        return self.text
+
+    def mouseDoubleClickEvent(self, event):
+        text, ok = QInputDialog.getMultiLineText(None, "Text", "LaTeX text:", self.text)
+        if ok:
+            self.text = text
+            self.picture = None       # shown as plain text until saved
+            self.update()
+
+    def to_dict(self):
+        x, y = self.frac_pos()
+        return {"kind": "text", "id": self.id, "x": x, "y": y, "w": self.frac_size()[0],
+                "text": self.text, "opts": self.options()}
+
+
+def make_item(editor, data):
+    """Return the element for the session item DATA."""
+    kind = data["kind"]
+    if kind in ("flow", "wrap", "textblock"):
+        return {"flow": FlowItem, "wrap": WrapItem,
+                "textblock": TextblockItem}[kind].from_box(editor, data)
+    return {"image": ImageItem, "ellipse": EllipseItem, "rect": RectItem,
+            "arrow": ArrowItem, "raw": RawItem, "text": TextItem}[kind](editor, data)
+
+
+# ---- style panel ----------------------------------------------------------
+
+class StylePanel(QDockWidget):
+    """Colour, line and fill options of the selected shapes."""
+
+    def __init__(self, editor):
+        super().__init__("Style", editor)
+        self.editor = editor
+        self.loading = False
+        form = QFormLayout()
+        self.color = self.color_box()
+        self.width = self.combo(["default", *core.WIDTHS])
+        self.dash = self.combo(list(core.DASHES))
+        self.tips = self.combo(list(core.TIPS))
+        self.bend = QDoubleSpinBox()
+        self.bend.setRange(-90, 90)
+        self.bend.setSingleStep(10)
+        self.fill = self.color_box("none")
+        self.opacity = QDoubleSpinBox()
+        self.opacity.setRange(0, 1)
+        self.opacity.setSingleStep(0.1)
+        self.opacity.setValue(1)
+        for label, widget in [("Colour", self.color), ("Line", self.width),
+                              ("Dash", self.dash), ("Tips", self.tips),
+                              ("Bend", self.bend), ("Fill", self.fill),
+                              ("Fill opacity", self.opacity)]:
+            form.addRow(label, widget)
+            signal = (widget.currentIndexChanged if isinstance(widget, QComboBox)
+                      else widget.valueChanged)
+            signal.connect(self.changed)
+        body = QWidget()
+        body.setLayout(form)
+        self.setWidget(body)
+        self.setEnabled(False)
+
+    def combo(self, entries):
+        box = QComboBox()
+        box.addItems(entries)
+        return box
+
+    def color_box(self, first="default"):
+        box = QComboBox()
+        box.addItem(first)
+        for name, color in self.editor.colors.items():
+            pm = QPixmap(14, 14)
+            pm.fill(color)
+            box.addItem(QIcon(pm), name)
+        return box
+
+    def styled_selection(self):
+        # The scene may signal while the editor is being torn down.
+        return [e for e in getattr(self.editor, "elements", [])
+                if e.isSelected() and e.styled]
+
+    def selection_changed(self):
+        items = self.styled_selection()
+        self.setEnabled(bool(items))
+        if not items:
+            return
+        item = items[0]
+        s = item.style
+        self.loading = True
+        self.color.setCurrentText(s.get("color") or "default")
+        self.width.setCurrentText(s.get("width") or "default")
+        self.dash.setCurrentText(s.get("dash") or "solid")
+        self.tips.setCurrentText(s.get("tips") or "->")
+        self.bend.setValue(s.get("bend") or 0)
+        self.fill.setCurrentText(s.get("fill") or "none")
+        self.opacity.setValue(s.get("opacity", 1.0))
+        arrow = item.kind == "arrow"
+        shape = item.kind in ("ellipse", "rect")
+        for widget, on in [(self.tips, arrow), (self.bend, arrow), (self.fill, shape),
+                           (self.opacity, shape), (self.width, item.kind != "text"),
+                           (self.dash, item.kind != "text")]:
+            widget.setEnabled(on)
+        self.loading = False
+
+    def current_style(self):
+        style = {"color": self.color.currentText(), "width": self.width.currentText(),
+                 "dash": self.dash.currentText(), "tips": self.tips.currentText(),
+                 "bend": self.bend.value(), "fill": self.fill.currentText(),
+                 "opacity": self.opacity.value()}
+        return {k: v for k, v in style.items()
+                if v not in ("default", "none", "solid", 0, 0.0, "->")
+                or (k == "opacity" and v < 1)}
+
+    def changed(self, *_):
+        if self.loading:
+            return
+        style = self.current_style()
+        for item in self.styled_selection():
+            keep = {k: v for k, v in style.items()
+                    if (k not in ("tips", "bend") or item.kind == "arrow")
+                    and (k not in ("fill", "opacity") or item.kind in ("ellipse", "rect"))}
+            item.style = keep
+            if hasattr(item, "update_style"):
+                item.update_style()
+            item.update()
+            self.editor.last_style[item.kind] = dict(keep)
 
 
 # ---- editor window --------------------------------------------------------
 
 class Editor(QMainWindow):
-    """One frame: rendered background plus editable elements."""
+    """One frame: background, pictures of its elements, drawn shapes."""
 
     def __init__(self, session, listen_stdin=True):
         super().__init__()
-        self.tex_dir = session["tex_dir"]
-        self.image_dir = session["image_dir"]
-        self.graphics_path = session.get("graphics_path", [])
-        self.stem = core.safe_stem(session["stem"])
-        self.setWindowTitle(f"beamer-gui: {session['stem']}")
-
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
         self.setCentralWidget(self.view)
         self.background = QGraphicsPixmapItem()
         self.background.setZValue(-1)
         self.scene.addItem(self.background)
-        self.set_background(session["background"])
-
         # Strong references: PySide may otherwise drop the Python
         # wrappers of items created in callbacks.  Order = stacking order.
         self.elements = []
-        for data in session["items"]:
-            self.add(KINDS[data["kind"]](self, data))
-
+        self.last_style = {}
+        self.snapping = True        # toolbar toggle
+        self.dragging = False       # a mouse button is down in the view
+        self.guides = [self.scene.addLine(0, 0, 0, 0, QPen(QColor("#e91e63"), 1, Qt.DashLine))
+                       for _ in range(2)]
+        for guide in self.guides:
+            guide.setZValue(20)
+            guide.hide()
+        self.load(session)
+        self.view.viewport().installEventFilter(self)
+        self.style_panel = StylePanel(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.style_panel)
+        self.scene.selectionChanged.connect(self.style_panel.selection_changed)
         self.build_toolbar()
-        self.resize(int(self.W) + 40, int(self.H) + 90)
+        self.resize(int(self.W) + 300, int(self.H) + 90)
         self.view.centerOn(self.W / 2, self.H / 2)
         if listen_stdin and not sys.stdin.isatty():
             self.notifier = QSocketNotifier(sys.stdin.fileno(), QSocketNotifier.Read)
             self.notifier.activated.connect(self.read_stdin)
+
+    # session
+    def load(self, session):
+        """Show SESSION, replacing any elements shown."""
+        for e in self.elements:
+            self.scene.removeItem(e)
+        self.elements = []
+        self.tex_dir = session["tex_dir"]
+        self.image_dir = session["image_dir"]
+        self.graphics_path = session.get("graphics_path", [])
+        self.stem = core.safe_stem(session["stem"])
+        self.setWindowTitle(f"beamer-gui: {session['stem']}")
+        pdf = session["background"]
+        page_b = session.get("page_b", -1)
+        page_a = session.get("page_a", -1)
+        bg = render_pdf(pdf, SCENE_WIDTH, page_b)
+        self.background.setPixmap(bg)
+        self.W, self.H = float(bg.width()), float(bg.height())
+        self.page_a = render_pdf(pdf, SCENE_WIDTH, page_a) if page_a >= 0 else bg
+        paper = session.get("paper") or [self.W, self.H]
+        self.px_per_pt = self.W / paper[0]
+        self.colors = self.sample_colors(pdf, session)
+        m = PAGE_MARGIN
+        self.scene.setSceneRect(QRectF(-m * self.W, -m * self.H,
+                                       (1 + 2 * m) * self.W, (1 + 2 * m) * self.H))
+        for data in session["items"]:
+            self.add(make_item(self, data))
+
+    def sample_colors(self, pdf, session):
+        """Return {name: QColor} from the swatch page of the session."""
+        page_s = session.get("page_s", -1)
+        if page_s < 0 or not session.get("colors"):
+            return {}
+        img = render_pdf(pdf, SCENE_WIDTH, page_s).toImage()
+        return {c["name"]: img.pixelColor(int(c["x"] * img.width()),
+                                          int(c["y"] * img.height()))
+                for c in session["colors"]}
+
+    # snapping
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.MouseButtonPress:
+            self.dragging = True
+        elif event.type() == QEvent.MouseButtonRelease:
+            self.dragging = False
+            self.show_guides(None, None)
+        return False
+
+    def snap_active(self, item):
+        """Snap ITEM only while the mouse drags it alone."""
+        return (self.snapping and self.dragging
+                and [e for e in self.elements if e.isSelected()] in ([], [item]))
+
+    def snap_lines(self, exclude=None):
+        """Return the vertical and horizontal lines to snap to.
+
+        The page edges and centre, and the edges and centres of every
+        element but EXCLUDE (arrows contribute their ends)."""
+        xs, ys = [0.0, self.W / 2, self.W], [0.0, self.H / 2, self.H]
+        for e in self.elements:
+            if e is exclude:
+                continue
+            if isinstance(e, ArrowItem):
+                for end in e.ends:
+                    p = end + e.pos()
+                    xs.append(p.x())
+                    ys.append(p.y())
+            else:
+                bx, by = core.box_lines(e.x(), e.y(), e.rect().width(), e.rect().height())
+                xs.extend(bx)
+                ys.extend(by)
+        return xs, ys
+
+    def show_guides(self, x, y):
+        """Show the snapping guides at X (vertical) and Y (horizontal)."""
+        r = self.scene.sceneRect()
+        for guide, value, line in [(self.guides[0], x, (x, r.top(), x, r.bottom())),
+                                   (self.guides[1], y, (r.left(), y, r.right(), y))]:
+            if value is None:
+                guide.hide()
+            else:
+                guide.setLine(*line)
+                guide.show()
+
+    def toggle_snapping(self, on):
+        self.snapping = on
+
+    def color(self, name, default):
+        return self.colors.get(name, default) if name else default
 
     # coordinates
     def to_scene(self, fx, fy):
@@ -368,26 +785,31 @@ class Editor(QMainWindow):
     def to_frac(self, point):
         return core.to_frac(point.x(), self.W), core.to_frac(point.y(), self.H)
 
-    def set_background(self, pdf):
-        pm = render_pdf(pdf, SCENE_WIDTH)
-        self.background.setPixmap(pm)
-        self.W, self.H = float(pm.width()), float(pm.height())
-        m = PAGE_MARGIN
-        self.scene.setSceneRect(QRectF(-m * self.W, -m * self.H,
-                                       (1 + 2 * m) * self.W, (1 + 2 * m) * self.H))
+    def crop(self, box):
+        x, y, w, h = box
+        return self.page_a.copy(int(x * self.W), int(y * self.H),
+                                max(int(w * self.W), 1), max(int(h * self.H), 1))
 
     def build_toolbar(self):
         toolbar = QToolBar()
         self.addToolBar(toolbar)
         for name, key, slot in [("Arrow", "A", self.add_arrow),
                                 ("Ellipse", "E", self.add_ellipse),
+                                ("Rectangle", "R", self.add_rect),
+                                ("Text", "T", self.add_text),
                                 ("Paste image", QKeySequence.Paste, self.paste),
+                                ("Snap", "S", None),
                                 ("Delete", QKeySequence.Delete, self.delete),
                                 ("Save", QKeySequence.Save, self.save),
                                 ("Quit", QKeySequence.Quit, self.close)]:
             action = QAction(name, self)
             action.setShortcut(QKeySequence(key))
-            action.triggered.connect(slot)
+            if slot is None:        # the snapping toggle
+                action.setCheckable(True)
+                action.setChecked(self.snapping)
+                action.toggled.connect(self.toggle_snapping)
+            else:
+                action.triggered.connect(slot)
             toolbar.addAction(action)
 
     # elements
@@ -402,14 +824,27 @@ class Editor(QMainWindow):
     def ids(self):
         return {e.id for e in self.elements}
 
-    def add_new(self, cls, **geometry):
-        return self.add(cls(self, {"id": core.new_id(cls.kind, self.ids()), **geometry}))
+    def add_new(self, cls, **data):
+        style = self.last_style.get(cls.kind, {})
+        data = {"id": core.new_id(cls.kind, self.ids()),
+                "opts": core.format_style(style, [], cls.kind) if cls.styled else "",
+                **data}
+        item = self.add(cls(self, data))
+        self.scene.clearSelection()
+        item.setSelected(True)
+        return item
 
     def add_arrow(self):
         self.add_new(ArrowItem, x1=.4, y1=.4, x2=.6, y2=.6)
 
     def add_ellipse(self):
         self.add_new(EllipseItem, x=.4, y=.4, w=.2, h=.2)
+
+    def add_rect(self):
+        self.add_new(RectItem, x=.4, y=.4, w=.2, h=.15)
+
+    def add_text(self):
+        self.add_new(TextItem, x=.3, y=.3, w=.3, text="Text")
 
     def paste(self):
         """Add the clipboard image, saved in the image directory.
@@ -439,6 +874,10 @@ class Editor(QMainWindow):
 
     def delete(self):
         for element in [e for e in self.elements if e.isSelected()]:
+            if not element.deletable:
+                self.statusBar().showMessage(
+                    f"{element.label} is part of the slide text: delete it in Emacs")
+                continue
             self.scene.removeItem(element)
             self.elements.remove(element)
 
@@ -461,8 +900,9 @@ class Editor(QMainWindow):
             message = json.loads(line)
         except ValueError:
             return
-        if "background" in message:
-            self.set_background(message["background"])
+        if "session" in message:
+            with open(message["session"]) as f:
+                self.load(json.load(f))
             self.statusBar().showMessage("Updated")
 
 

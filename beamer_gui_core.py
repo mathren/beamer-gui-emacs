@@ -101,3 +101,142 @@ def is_image_file(path):
 def safe_stem(stem):
     """Return STEM reduced to characters safe in file names."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-") or "img"
+
+
+# ---- TikZ options of drawn shapes ------------------------------------------
+#
+# A shape's options are a comma-separated TikZ list such as
+# "draw=Maroon, very thick, dashed, bend left=20, my key=1".  The
+# editor manages a few of them (STYLE_KEYS); the others are kept,
+# in their order, after the managed ones.
+
+WIDTHS = {"ultra thin": 0.1, "very thin": 0.2, "thin": 0.4, "semithick": 0.6,
+          "thick": 0.8, "very thick": 1.2, "ultra thick": 1.6}
+DASHES = ("solid", "dashed", "dotted", "densely dashed", "densely dotted",
+          "loosely dashed", "loosely dotted", "dash dot")
+TIPS = ("->", "<-", "<->", "-")
+BASE_LINE_WIDTH = 2.0   # pt, from the gui arrow/ellipse/rect styles
+COLOR_KEY = {"arrow": "draw", "ellipse": "draw", "rect": "draw", "text": "text"}
+STYLE_KEYS = ("color", "width", "dash", "tips", "bend", "fill", "opacity")
+
+
+def split_options(options):
+    """Split the TikZ option list OPTIONS at top-level commas."""
+    parts, depth, start = [], 0, 0
+    for i, c in enumerate(options):
+        if c in "{[":
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(options[start:i])
+            start = i + 1
+    parts.append(options[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def parse_style(options, kind):
+    """Return (STYLE, REST) for the options of a shape of KIND.
+
+    STYLE maps the managed keys of STYLE_KEYS to their values;
+    REST lists the other options, unchanged."""
+    style, rest = {}, []
+    color_key = COLOR_KEY.get(kind)
+    for part in split_options(options or ""):
+        key, _, value = (s.strip() for s in part.partition("="))
+        if color_key and key == color_key and value:
+            style["color"] = value
+        elif part in WIDTHS:
+            style["width"] = part
+        elif key == "line width" and value:
+            style["width"] = value
+        elif part in DASHES:
+            style["dash"] = part
+        elif kind == "arrow" and part in TIPS:
+            style["tips"] = part
+        elif kind == "arrow" and key in ("bend left", "bend right"):
+            angle = float(value) if value else 30.0
+            style["bend"] = angle if key == "bend left" else -angle
+        elif kind in ("ellipse", "rect") and key == "fill" and value:
+            style["fill"] = value
+        elif kind in ("ellipse", "rect") and key == "fill opacity" and value:
+            style["opacity"] = float(value)
+        else:
+            rest.append(part)
+    return style, rest
+
+
+def format_style(style, rest, kind):
+    """Return the option list of a shape of KIND with STYLE and REST."""
+    parts = []
+    if style.get("color"):
+        parts.append(f"{COLOR_KEY[kind]}={style['color']}")
+    width = style.get("width")
+    if width:
+        parts.append(width if width in WIDTHS else f"line width={width}")
+    if style.get("dash") and style["dash"] != "solid":
+        parts.append(style["dash"])
+    if kind == "arrow" and style.get("tips"):
+        parts.append(style["tips"])
+    if kind == "arrow" and style.get("bend"):
+        bend = style["bend"]
+        side = "left" if bend > 0 else "right"
+        parts.append(f"bend {side}={abs(bend):g}")
+    if kind in ("ellipse", "rect") and style.get("fill"):
+        parts.append(f"fill={style['fill']}")
+        if style.get("opacity") is not None and style["opacity"] < 1:
+            parts.append(f"fill opacity={style['opacity']:g}")
+    return ", ".join(parts + list(rest))
+
+
+def line_width_pt(width):
+    """Return the line width WIDTH (a TikZ keyword or length) in points."""
+    if not width:
+        return BASE_LINE_WIDTH
+    if width in WIDTHS:
+        return WIDTHS[width]
+    m = re.match(r"\s*([0-9.]+)\s*(pt|mm|cm)?\s*$", width)
+    if not m:
+        return BASE_LINE_WIDTH
+    return float(m.group(1)) * {"pt": 1, None: 1, "mm": 2.84528, "cm": 28.4528}[m.group(2)]
+
+
+def bend_controls(p1, p2, angle):
+    """Return the Bezier control points of a TikZ "to[bend ...]" path.
+
+    P1 and P2 are (x, y) in screen coordinates (y down); ANGLE is
+    positive for bend left, as TikZ sees it with y up."""
+    import math
+    (x1, y1), (x2, y2) = p1, p2
+    dx, dy = x2 - x1, -(y2 - y1)            # TikZ orientation, y up
+    d = math.hypot(dx, dy)
+    a = math.atan2(dy, dx)
+    k = 0.3915 * d                          # TikZ looseness 1
+    out_a = a + math.radians(angle)
+    in_a = a + math.pi - math.radians(angle)
+    c1 = (x1 + k * math.cos(out_a), y1 - k * math.sin(out_a))
+    c2 = (x2 + k * math.cos(in_a), y2 - k * math.sin(in_a))
+    return c1, c2
+
+
+# ---- snapping --------------------------------------------------------------
+
+SNAP_TOLERANCE = 6.0    # pixels
+
+
+def box_lines(x, y, w, h):
+    """Return the vertical and horizontal lines of a box: edges and centre."""
+    return (x, x + w / 2, x + w), (y, y + h / 2, y + h)
+
+
+def snap_offset(values, targets, tolerance=SNAP_TOLERANCE):
+    """Return (DELTA, TARGET) moving one of VALUES onto one of TARGETS.
+
+    The smallest move within TOLERANCE wins; (0, None) if none."""
+    best = None
+    for v in values:
+        for t in targets:
+            d = t - v
+            if abs(d) <= tolerance and (best is None or abs(d) < abs(best[0])):
+                best = (d, t)
+    return best or (0.0, None)

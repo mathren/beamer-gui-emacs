@@ -20,12 +20,70 @@ emacs -Q -l quicktry.el path/to/beamer_source.tex
 
 ** Usage
 
-1. Once per document: =M-x beamer-gui-insert-preamble=.
+1. Once per document: =M-x beamer-gui-insert-preamble=.  It adds (or
+   updates) a block of preamble lines, framed by =%%% beamer-gui
+   preamble N= and =%%% ---=.
 2. With point in a frame: =C-c g= (=beamer-gui-edit-frame=), in
    buffers where =beamer-gui-mode= is on.
-3. In the GUI: drag and resize elements, =A= adds an arrow, =E= an
-   ellipse, =C-v= pastes an image (saved in =fig_slides/=), =Del=
-   deletes, =C-s= writes the changes back into the buffer.
+3. In the GUI:
+   - drag elements of the slide: images, blocks, tcolorboxes,
+     itemizes, tables, textblocks and any other environment of the
+     frame;
+   - resize them from the 8 handles shown on the selected element
+     (images keep their aspect ratio; blocks change width only);
+   - add shapes: =A= arrow, =E= ellipse, =R= rectangle, =T= text
+     (double-click a text to edit its LaTeX);
+   - =C-v= pastes an image from the clipboard (saved in =fig_slides/=);
+   - the Style panel sets colour, line width, dash, arrow tips, bend,
+     fill and fill opacity of the selected shapes; the colours are
+     those of your preamble (and of the files it =\input=s), then the
+     standard named colours;
+   - while dragging, edges and centres snap to those of the other
+     elements and of the page, with a guide line; =S= toggles
+     snapping;
+   - =Del= deletes a shape, =C-s= writes the changes into the buffer
+     and recompiles the frame.
+
+** What the code looks like
+
+Everything the GUI writes or changes is framed by two comment lines,
+so it is easy to find and edit by hand:
+
+#+begin_src latex
+%%% beamer-gui arrow1
+\begin{textblock*}{0.2\paperwidth}(0.4\paperwidth,0.4\paperheight)
+  \tikz[x=\paperwidth,y=\paperheight]{\useasboundingbox (0,0) rectangle (0.2,-0.2); \draw[gui arrow, draw=Maroon, very thick, bend left=30] (0,-0) to (0.2,-0.2);}
+\end{textblock*}
+%%% ---
+#+end_src
+
+Colours and styles are plain TikZ options; options added by hand are
+kept by the GUI.  The base styles =gui arrow=, =gui ellipse=, =gui
+rect= and =gui text= are in the preamble block.
+
+An element of the text that is moved is wrapped, unchanged, in a
+=textblock*=, and a spacer of its original size keeps the rest of the
+slide in place:
+
+#+begin_src latex
+%%% beamer-gui w1 (moved block)
+\begin{textblock*}{0.9\paperwidth}(0.15\paperwidth,0.53\paperheight)
+  \beamerguicontext{3pt}{0pt}% as in the text
+  \begin{block}{A block}
+    Block content.
+  \end{block}
+\end{textblock*}
+\beamerguivspace{30.45pt}{0pt}{3pt}
+%%% ---
+#+end_src
+
+=M-x beamer-gui-unwrap= with point in such a block puts the element
+back in the text flow.  A moved =textblock= keeps its own units.
+
+Positions come from LaTeX itself: the frame is compiled with
+invisible markers recording where each element is.  Only elements on
+the last slide of a frame with overlays can be edited, and in Org
+buffers only the shapes the GUI draws.
 
 * Installation
 
