@@ -37,8 +37,6 @@ package-lint:
 
 # docs/*.org to the site, in html-content/; the GIF is shared with README.org.
 docs:
-	mkdir -p html-content/images
-	cp images/beamer-gui-demo.gif html-content/images/
 	$(EMACS) -batch -Q -l publish.el all
 	python3 tools/check-links.py html-content
 

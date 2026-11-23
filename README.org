@@ -10,7 +10,7 @@ I wanted to be able to spawn a GUI to move elements and add arrows,
 this package allows to do that.
 
 #+CAPTION: Example of GUI usage
-[[./images/beamer-gui-demo.gif]]
+[[./html-content/images/beamer-gui-demo.gif]]
 
 * Try it without your configuration
 
@@ -153,3 +153,9 @@ example =C-c g=:
 (with-eval-after-load 'beamer-gui
   (keymap-set beamer-gui-mode-map "C-c g" #'beamer-gui-edit-frame))
 #+end_src
+
+* TODO list of features and fixes
+- [ ] safeguard for non beamer files, gracious fail
+- [ ] make existing elements editable (list from =(LaTeX-environment
+  ARG)=, or use example from real talk)
+- [ ] styles for arrows, circles (maybe with tikz or gimp, or inkscape as external tools?)
