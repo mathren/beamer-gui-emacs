@@ -441,9 +441,9 @@ Skip the test if pdflatex is missing; fail if compilation fails."
 (ert-deftest bgt-mode-key ()
   (with-temp-buffer
     (beamer-gui-mode 1)
-    (should (eq (key-binding (kbd "C-c g")) #'beamer-gui-edit-frame))
+    (should (eq (key-binding (kbd "C-c M-g")) #'beamer-gui-edit-frame))
     (beamer-gui-mode -1)
-    (should-not (eq (key-binding (kbd "C-c g")) #'beamer-gui-edit-frame))))
+    (should-not (eq (key-binding (kbd "C-c M-g")) #'beamer-gui-edit-frame))))
 
 
 ;;;; Org

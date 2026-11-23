@@ -58,7 +58,7 @@
 " beamer-gui-preamble
    "\\begin{document}
 \\begin{frame}{Try beamer-gui}
-  Put point here and press C-c g, or run \\texttt{M-x beamer-gui-edit-frame}.
+  Put point here and press C-c M-g, or run \\texttt{M-x beamer-gui-edit-frame}.
   \\begin{center}
     \\includegraphics[width=0.25\\textwidth]{fig_slides/example.pdf}
   \\end{center}

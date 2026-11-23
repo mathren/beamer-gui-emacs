@@ -47,7 +47,7 @@
 ;; Positions are measured by LaTeX itself: the frame is compiled with
 ;; invisible markers that record where each element is.
 ;;
-;; Entry point: `beamer-gui-edit-frame', bound to C-c g in
+;; Entry point: `beamer-gui-edit-frame', bound to C-c M-g in
 ;; `beamer-gui-mode', a minor mode to enable in LaTeX buffers.  Run
 ;; `beamer-gui-insert-preamble' once per document, and set
 ;; `beamer-gui-python' to a Python with PySide6 and PyMuPDF.
@@ -1769,9 +1769,8 @@ Saving in the GUI rewrites the changed elements in this buffer."
 (defvar beamer-gui-mode-map
   (let ((map (make-sparse-keymap)))
     ;; C-c followed by a letter is reserved for users by the GNU key
-    ;; binding conventions; this binding is the author's choice and is
-    ;; easy to change in this map.
-    (define-key map (kbd "C-c g") #'beamer-gui-edit-frame)
+    ;; binding conventions; C-c M-g is free in Emacs, AUCTeX and RefTeX.
+    (define-key map (kbd "C-c M-g") #'beamer-gui-edit-frame)
     map)
   "Keymap of `beamer-gui-mode'.")
 
