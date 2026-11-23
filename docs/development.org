@@ -25,6 +25,17 @@ make fuzz        # random documents, edits and editor input; minutes
 make docs        # this site, into html-content/
 #+end_src
 
+* Versions
+
+#+begin_src bash
+make set-version VERSION=0.2.1   # write it everywhere the current one is
+make check-version               # the header is X.Y.Z
+make check-version TAG=v0.2.1    # and matches the tag
+#+end_src
+
+The version is the =;; Version:= header of =beamer-gui.el=; the site's
+footer reads it.
+
 The layout tests move each kind of element, twice, in top-aligned and
 centred frames, and check that every other word of the slide stays
 within 0.5pt.  The fuzzers keep failing cases in
@@ -32,5 +43,6 @@ within 0.5pt.  The fuzzers keep failing cases in
 
 * Releases
 
-A tag runs the lint, the tests and =make docs=, checks the site's
-links, and only then publishes the site to GitHub Pages.
+A tag runs the lint, =make check-version= with the tag, the tests and
+=make docs=, checks the site's links, and only then publishes the site
+to GitHub Pages.

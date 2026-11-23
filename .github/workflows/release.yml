@@ -46,9 +46,7 @@ jobs:
         run: make lint
 
       - name: Check the tag matches the package version
-        run: |
-          version="$(sed -n 's/^;; Version: *//p' beamer-gui.el | head -1)"
-          test "${GITHUB_REF_NAME#v}" = "$version"
+        run: make check-version TAG="${GITHUB_REF_NAME}"
 
       - name: Test
         run: make test
