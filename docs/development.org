@@ -1,0 +1,36 @@
+#+TITLE: Development
+#+PREVIOUS_PAGE: code.org
+#+NEXT_PAGE:     limitations.org
+
+* Files
+
+| File                 | Content                                            |
+|----------------------+----------------------------------------------------|
+| =beamer-gui.el=      | Emacs side: parsing, measuring, writing the code   |
+| =beamer_gui.py=      | the editor window (PySide6)                        |
+| =beamer_gui_core.py= | the editor's functions that need no Qt             |
+| =quicktry.el=        | the =emacs -Q= sample                              |
+| =publish.el=         | this site, from =docs/=                            |
+
+The two sides exchange one JSON object per line: the editor writes
+saves and clicks to its standard output, Emacs answers with the file of
+the new session after each compilation.
+
+* Tests
+
+#+begin_src bash
+make test        # Emacs (ERT), editor (pytest), layout
+make lint        # checkdoc and package-lint
+make fuzz        # random documents, edits and editor input; minutes
+make docs        # this site, into html-content/
+#+end_src
+
+The layout tests move each kind of element, twice, in top-aligned and
+centred frames, and check that every other word of the slide stays
+within 0.5pt.  The fuzzers keep failing cases in
+=test/fuzz/fuzz-failures/=.
+
+* Releases
+
+A tag runs the lint, the tests and =make docs=, checks the site's
+links, and only then publishes the site to GitHub Pages.

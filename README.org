@@ -1,6 +1,8 @@
 #+title: Emacs GUI editor for LaTeX beamer
 #+author: Mathieu Renzo w/ Claude:Opus 5
 
+Documentation: [[https://mathren.github.io/beamer-gui-emacs/]]
+
 I use emacs + Latex beamer to make pdf presentations. See [[https://github.com/mathren/beamer_template_mrenzo][here]] for a
 template and my [[https://lavinia.as.arizona.edu/~mrenzo/talks.html][talks page]] for concrete examples.
 

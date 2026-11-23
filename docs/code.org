@@ -1,0 +1,70 @@
+#+TITLE: The code written
+#+PREVIOUS_PAGE: usage.org
+#+NEXT_PAGE:     development.org
+
+Everything the editor writes or changes is framed by two comment lines.
+Code outside them is not touched, and a save without changes leaves
+the file as it was.
+
+* Shapes
+
+#+begin_src latex
+%%% beamer-gui arrow1
+\begin{textblock*}{0.2\paperwidth}(0.4\paperwidth,0.4\paperheight)
+  \tikz[x=\paperwidth,y=\paperheight]{\useasboundingbox (0,0) rectangle (0.2,-0.2); \draw[gui arrow, draw=Maroon, very thick, bend left=30] (0,-0) to (0.2,-0.2);}
+\end{textblock*}
+%%% ---
+#+end_src
+
+Positions are fractions of the page.  Colours and styles are TikZ
+options; options added by hand are kept.  The base styles =gui arrow=,
+=gui ellipse=, =gui rect= and =gui text= are in the preamble lines.
+
+* Moved elements
+
+An element of the text that is moved is wrapped, unchanged, in a
+=textblock*=.  A spacer of its original size stays in its place, so the
+rest of the slide does not move:
+
+#+begin_src latex
+%%% beamer-gui w1 (moved block)
+\begin{textblock*}{0.9\paperwidth}(0.15\paperwidth,0.53\paperheight)
+  \beamerguicontext{3pt}{0pt}% as in the text
+  \begin{block}{A block}
+    Block content.
+  \end{block}
+\end{textblock*}
+\beamerguivspace{30.45pt}{0pt}{3pt}
+%%% ---
+#+end_src
+
+=\beamerguicontext= gives the element the spacing it had in the text.
+Resizing changes the =width=, =height= or =scale= of an image, or the
+=width= of a tcolorbox, in the unit it was written in.
+=M-x beamer-gui-unwrap= removes the wrapper and the spacer.
+
+A moved =textblock= or =textblock*= keeps its own units, and gets the
+comment lines.
+
+* Background
+
+#+begin_src latex
+%%% beamer-gui background
+{%
+\setbeamercolor{background canvas}{bg=bblue!15}%
+\usebackgroundtemplate{\includegraphics[width=\paperwidth,height=\paperheight]{fig_slides/bg.png}}%
+%%% ---
+\begin{frame}{...}
+\end{frame}
+%%% beamer-gui background-end
+}%
+%%% ---
+#+end_src
+
+* How positions are known
+
+The frame is compiled twice in one document: once with invisible
+markers recording where each element is (=\pdfsavepos=), once with the
+elements hidden by =invisibleenv=, which keeps their space; this second
+copy is the editor's background.  A last page holds a swatch of each
+colour, read back for the palette.

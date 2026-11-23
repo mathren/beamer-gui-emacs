@@ -1,0 +1,57 @@
+#+TITLE: beamer-gui documentation
+#+PREVIOUS_PAGE: limitations.org
+#+NEXT_PAGE:     usage.org
+
+=beamer-gui= edits the frames of a LaTeX beamer presentation in a
+graphical window started from Emacs.  The elements of a frame --
+images, blocks, tcolorboxes, lists, tables, textblocks -- are moved and
+resized with the mouse.  Arrows, ellipses, rectangles and text are
+added with the colours of the document.  Every change is written to the
+LaTeX source, which is recompiled after each save; the source stays the
+reference, and the code written is plain LaTeX, framed by two comment
+lines (see [[file:code.org][Code]]).
+
+#+CAPTION: Moving an image, pasting a figure, adding an arrow.
+#+ATTR_HTML: :width 75%
+[[file:images/beamer-gui-demo.gif]]
+
+* Try it with =emacs -Q=
+
+This does not touch your own Emacs configuration.
+
+1. *Get beamer-gui.*
+   #+begin_src bash
+     git clone https://github.com/mathren/beamer-gui-emacs
+     cd beamer-gui-emacs
+   #+end_src
+
+2. *A Python environment* with PySide6 and PyMuPDF, for the window:
+   #+begin_src bash
+     conda env create -f environment.yml
+   #+end_src
+   LaTeX (=pdflatex= with beamer, textpos and TikZ) comes from your TeX
+   distribution.
+
+3. *Open the sample deck.*
+   #+begin_src bash
+     BEAMER_GUI_PYTHON=$(conda run -n beamer-gui which python) emacs -Q -l quicktry.el
+   #+end_src
+   Point is in a frame: =M-x beamer-gui-edit-frame= opens it.
+
+* Install
+
+Emacs 30.1 or later, from the latest commit of =main=:
+
+#+begin_src elisp
+(use-package beamer-gui
+  :vc (:url "https://github.com/mathren/beamer-gui-emacs"
+       :branch "main"
+       :rev :newest)
+  :hook ((LaTeX-mode latex-mode) . beamer-gui-mode)
+  :custom
+  (beamer-gui-python "/path/to/envs/beamer-gui/bin/python3"))
+#+end_src
+
+=beamer-gui-python= is the interpreter printed by =conda run -n
+beamer-gui which python=.  Update with =M-x package-vc-upgrade RET
+beamer-gui=.

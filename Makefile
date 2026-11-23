@@ -1,7 +1,7 @@
 EMACS ?= emacs
 PYTHON ?= python3
 
-.PHONY: test test-el test-py test-layout fuzz compile clean
+.PHONY: test test-el test-py test-layout fuzz lint checkdoc package-lint docs compile clean
 test: compile test-el test-py test-layout
 
 compile:
@@ -21,6 +21,26 @@ fuzz:
 	$(PYTHON) test/fuzz/fuzz.py 20
 	QT_QPA_PLATFORM=offscreen $(PYTHON) test/fuzz/gui_fuzz.py 400
 	$(PYTHON) test/fuzz/loop_fuzz.py 10
+	QT_QPA_PLATFORM=offscreen $(PYTHON) test/fuzz/click_fuzz.py 10
+
+lint: checkdoc package-lint
+
+checkdoc:
+	$(EMACS) -batch -Q -L . -l tools/checkdoc.el beamer-gui.el
+
+# package-lint as MELPA runs it.  It has to be installed: from MELPA, or
+# PACKAGE_LINT_DIR naming a checkout.
+package-lint:
+	$(EMACS) -batch -Q $(if $(PACKAGE_LINT_DIR),-L $(PACKAGE_LINT_DIR),) \
+	  --eval "(progn (require 'package) (package-initialize) (require 'package-lint))" \
+	  -f package-lint-batch-and-exit beamer-gui.el
+
+# docs/*.org to the site, in html-content/; the GIF is shared with README.org.
+docs:
+	mkdir -p html-content/images
+	cp images/beamer-gui-demo.gif html-content/images/
+	$(EMACS) -batch -Q -l publish.el all
+	python3 tools/check-links.py html-content
 
 clean:
 	rm -f *.elc

@@ -1,0 +1,80 @@
+name: Build
+
+# Lint, tests and the site, for a push to main or a pull request.  A tag
+# runs release.yml only, which repeats all of this before publishing.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.el'
+      - '**/*.py'
+      - 'Makefile'
+      - '.github/workflows/*.yml'
+      - 'docs/**'
+      - 'html-content/**'
+  pull_request:
+    paths:
+      - '**/*.el'
+      - '**/*.py'
+      - 'Makefile'
+      - '.github/workflows/*.yml'
+      - 'docs/**'
+      - 'html-content/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: '30.1'
+
+      # pdflatex with beamer, textpos, tcolorbox, TikZ and the mwe images.
+      - name: Install LaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends texlive-latex-base \
+            texlive-latex-recommended texlive-latex-extra texlive-pictures \
+            texlive-fonts-recommended lmodern
+          # Qt's offscreen platform, for the editor's tests.
+          sudo apt-get install -y --no-install-recommends libegl1 libxkbcommon0 \
+            libfontconfig1 libdbus-1-3
+
+      - name: Install Python packages
+        run: pip install PySide6 pymupdf pytest flake8
+
+      - name: Install package-lint
+        run: |
+          emacs -batch -Q --eval "(progn \
+            (require 'package) \
+            (add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\") t) \
+            (package-initialize) \
+            (package-refresh-contents) \
+            (package-install 'package-lint))"
+
+      - name: checkdoc and package-lint
+        run: make lint
+
+      - name: flake8
+        run: flake8 --max-line-length 100 *.py test/*.py test/fuzz/*.py
+
+      - name: Test
+        run: make test
+
+      - name: Export the docs
+        run: make docs
+
+      - name: Keep the site
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: html-content

@@ -1,0 +1,76 @@
+#+TITLE: Using beamer-gui
+#+PREVIOUS_PAGE: index.org
+#+NEXT_PAGE:     code.org
+
+* Opening a frame
+
+Once per document, =M-x beamer-gui-insert-preamble= adds the few
+preamble lines the generated code needs (or updates them).  Then, with
+point in a frame, =C-c M-g= (=beamer-gui-edit-frame=) compiles the
+frame and opens it in the editor window.  The key is in
+=beamer-gui-mode=, enabled in LaTeX buffers by the =:hook= above.
+
+The frame is compiled alone, with the document's preamble and with
+beamer's note options turned off, so the window shows the slide.
+
+* In the editor
+
+| Key or action     | Effect                                                     |
+|-------------------+------------------------------------------------------------|
+| drag              | move the element                                           |
+| drag a handle     | resize; images keep their aspect ratio                     |
+| =Ctrl=-click      | show the clicked text's source in Emacs                    |
+| double-click      | the same; on a text shape, edit its text                   |
+| =A= =E= =R= =T=   | add an arrow, ellipse, rectangle, text                     |
+| =C-v=             | paste an image (saved in =fig_slides/=)                    |
+| =B=               | background of the frame: colour, tint, image               |
+| =S=               | snapping on or off                                         |
+| =Del=             | delete the selected shapes                                 |
+| =C-s=             | write the changes to the buffer and recompile              |
+
+Elements of the frame are any environment of it and every
+=\includegraphics=.  =columns=, =center=, =minipage= and the overlay
+environments are looked into, not moved; verbatim environments are
+skipped.
+
+The *Style* panel sets the colour, line width, dash, arrow tips, bend,
+fill and fill opacity of the selected shapes.  Its colours are those
+the preamble defines, and the files it =\input=s, then the standard
+named colours.
+
+While one element is dragged, its edges and centre snap to those of
+the other elements and of the page, within 6 pixels, and a guide line
+shows the alignment.
+
+Clicking text jumps to it in the source: the word clicked, its
+neighbours and the element it belongs to are looked up in the frame.
+Text with no literal source (maths, accents, numbers of a list) jumps
+to the nearest word that has one.
+
+* Commands
+
+| Command                      | Effect                                                    |
+|------------------------------+-----------------------------------------------------------|
+| =beamer-gui-edit-frame=      | open the frame at point in the editor                     |
+| =beamer-gui-insert-preamble= | add or update the preamble lines                          |
+| =beamer-gui-unwrap=          | put a moved element back in the text flow                 |
+| =beamer-gui-label-frames=    | give every frame a =label=, from its title                |
+| =beamer-gui-mode=            | minor mode with the =C-c M-g= key                         |
+
+* Options
+
+| Variable                            | Default                    |
+|-------------------------------------+----------------------------|
+| =beamer-gui-python=                 | =python3=                  |
+| =beamer-gui-image-dir-name=         | =fig_slides=               |
+| =beamer-gui-latex-command=          | =pdflatex= in batch mode   |
+| =beamer-gui-container-environments= | looked into, not moved     |
+| =beamer-gui-ignored-environments=   | skipped                    |
+| =beamer-gui-inline-environments=    | set inside a line          |
+| =beamer-gui-movable-macros=         | =includegraphics=          |
+
+To use another key:
+#+begin_src elisp
+(with-eval-after-load 'beamer-gui
+  (keymap-set beamer-gui-mode-map "C-c g" #'beamer-gui-edit-frame))
+#+end_src

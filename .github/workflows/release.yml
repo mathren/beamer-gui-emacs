@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  # Nothing is published until everything -- the site's links too -- is
+  # built and checked.
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: '30.1'
+
+      - name: Install LaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends texlive-latex-base \
+            texlive-latex-recommended texlive-latex-extra texlive-pictures \
+            texlive-fonts-recommended lmodern
+          sudo apt-get install -y --no-install-recommends libegl1 libxkbcommon0 \
+            libfontconfig1 libdbus-1-3
+
+      - name: Install Python packages
+        run: pip install PySide6 pymupdf pytest
+
+      - name: Install package-lint
+        run: |
+          emacs -batch -Q --eval "(progn \
+            (require 'package) \
+            (add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\") t) \
+            (package-initialize) \
+            (package-refresh-contents) \
+            (package-install 'package-lint))"
+
+      - name: checkdoc and package-lint
+        run: make lint
+
+      - name: Check the tag matches the package version
+        run: |
+          version="$(sed -n 's/^;; Version: *//p' beamer-gui.el | head -1)"
+          test "${GITHUB_REF_NAME#v}" = "$version"
+
+      - name: Test
+        run: make test
+
+      # Also checks every internal link of the site.
+      - name: Export the docs
+        run: make docs
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+      - name: Package the site for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: html-content
+
+  # Only after the release job has succeeded: a tag whose tests fail must
+  # not replace the documentation of the last good release.
+  deploy-docs:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,16 @@
+#+TITLE: Limitations
+#+PREVIOUS_PAGE: development.org
+#+NEXT_PAGE:     index.org
+
+- Only elements visible on the last slide of a frame with overlays can
+  be edited.
+- In a frame too tall for the slide (LaTeX warns "Overfull \vbox"),
+  TeX shrinks the spacing, and moving an element can shift the rest by
+  a point or two.  In frames that fit, nothing else moves.
+- In Org buffers only the shapes drawn by the editor can be edited.
+- Clicking text with no literal source (maths, accented letters,
+  numbers of a list, letters inside an image) jumps to the nearest word
+  that has one.  SyncTeX is not used: beamer reads a frame as one
+  argument, so SyncTeX maps all of a frame's text to =\end{frame}=.
+- Text edited in Emacs appears in the editor after its next save
+  (=C-s=), or when the frame is opened again.
