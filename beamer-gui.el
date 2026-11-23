@@ -347,6 +347,14 @@ the text after the closing bracket; or nil."
         (cons opts (buffer-substring close (point-max)))))))
 
 (defun beamer-gui--parse-body (body x y w)
+  "Return the element plist for BODY of a block at X, Y of width W.
+A body that cannot be read, for example after a hand edit left a
+brace unbalanced, is returned as a raw block."
+  (condition-case nil
+      (beamer-gui--parse-body-1 body x y w)
+    ((scan-error error) (list :kind "raw" :x x :y y :w w :body (string-trim body)))))
+
+(defun beamer-gui--parse-body-1 (body x y w)
   "Return the element plist for BODY of a block at X, Y of width W."
   (let ((case-fold-search nil)
         (n beamer-gui--number-group)
@@ -565,7 +573,8 @@ Return point.  Comments are skipped."
             ((equal (match-string 1) "begin") (cl-incf depth))
             (t (cl-decf depth))))
     (when (> depth 0)
-      (error "No \\end{%s}" name))
+      (user-error "No \\end{%s} for the \\begin{%s} on line %d"
+                  name name (line-number-at-pos)))
     (point)))
 
 (defun beamer-gui--frame-body (beg end)
@@ -575,7 +584,9 @@ The body starts after \\begin{frame} and its arguments on the same line."
     (goto-char beg)
     (re-search-forward "\\\\begin{frame}")
     (while (progn (skip-chars-forward " \t")
-                  (or (beamer-gui--skip-overlay) (beamer-gui--skip-group))))
+                  (or (beamer-gui--skip-overlay)
+                      (condition-case nil (beamer-gui--skip-group)
+                        (scan-error (user-error "Unbalanced brackets after \\begin{frame}"))))))
     (cons (point)
           (progn (goto-char end)
                  (search-backward "\\end{frame}" beg)
@@ -607,14 +618,20 @@ or \"textblock\", :name (environment or macro), :beg, :end, and
                 (forward-line 1)))
              (macro
               (when (member macro beamer-gui-movable-macros)
-                (when (eq (char-after) ?*) (forward-char))
-                (beamer-gui--skip-overlay)
-                (beamer-gui--skip-group)
-                (skip-chars-forward " \t")
-                (when (eq (char-after) ?{)
-                  (beamer-gui--skip-group)
-                  (add (list :kind "flow" :name macro :beg start :end (point)
-                             :inline t)))))
+                ;; Arguments with unbalanced brackets (code being typed)
+                ;; make the macro not movable rather than fail.
+                (let ((after (point)))
+                  (condition-case nil
+                      (progn
+                        (when (eq (char-after) ?*) (forward-char))
+                        (beamer-gui--skip-overlay)
+                        (beamer-gui--skip-group)
+                        (skip-chars-forward " \t")
+                        (when (eq (char-after) ?{)
+                          (beamer-gui--skip-group)
+                          (add (list :kind "flow" :name macro :beg start :end (point)
+                                     :inline t))))
+                    (scan-error (goto-char after))))))
              ((member env beamer-gui-container-environments))
              ((member env beamer-gui-ignored-environments)
               (beamer-gui--env-end env))

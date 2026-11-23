@@ -103,6 +103,16 @@ def test_tint():
     assert core.join_tint("", 50) == ""
 
 
+def test_typed_text_checks():
+    assert core.escape_percent("100%") == "100\\%"
+    assert core.escape_percent("50\\% off") == "50\\% off"          # already escaped
+    assert core.escape_percent("a\\\\%b") == "a\\\\\\%b"        # \\ then %
+    assert core.text_problem("{a} \\{ \\}") is None
+    assert core.text_problem("{") == "a { has no matching }"
+    assert core.text_problem("a}") == "a } has no matching {"
+    assert core.text_problem("a\\") == "the text ends with a backslash"
+
+
 def test_line_width_and_bend():
     assert core.line_width_pt(None) == core.BASE_LINE_WIDTH
     assert core.line_width_pt("thick") == 0.8
@@ -294,6 +304,20 @@ def test_style_panel_applies_to_selection(editor):
     # Options the panel does not manage are kept.
     assert by_id(editor)["arrow1"]["opts"] == \
         "draw=Maroon, thick, <->, bend right=20, my key=1"
+
+
+def test_text_dialog_rejects_bad_text(editor, monkeypatch):
+    answers = iter([("{oops", True), ("50% {ok}", True)])
+    labels = []
+
+    def dialog(parent, title, label, text):
+        labels.append(label)
+        return next(answers)
+    monkeypatch.setattr(beamer_gui.QInputDialog, "getMultiLineText", staticmethod(dialog))
+    item = elements(editor)["text1"]
+    item.mouseDoubleClickEvent(None)
+    assert item.text == "50\\% {ok}"
+    assert "no matching" in labels[1]
 
 
 def test_new_shapes_take_last_style(editor):

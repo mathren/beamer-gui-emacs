@@ -157,6 +157,18 @@ Skip the test if pdflatex is missing; fail if compilation fails."
   (should-error (beamer-gui-item-to-tex '(:id "ok" :kind "nope"))))
 
 
+;; Found by fuzzing: a block a hand edit left unreadable must not
+;; stop the frame from opening.
+(ert-deftest bgt-unreadable-block-is-raw ()
+  (bgt-with (concat "\\begin{frame}\n"
+                    (beamer-gui-item-to-tex '(:id "t1" :kind "text" :x 0.1 :y 0.1 :w 0.2
+                                                  :opts "" :text "{"))
+                    "\n\\end{frame}\n")
+    (let ((block (car (beamer-gui-parse-blocks (point-min) (point-max)))))
+      (should (equal (plist-get block :kind) "raw"))
+      (should (equal (plist-get block :body) "\\tikz\\node[gui text] {{};")))))
+
+
 ;;;; Movable elements of the text
 
 (ert-deftest bgt-scan-elements ()
@@ -172,6 +184,16 @@ Skip the test if pdflatex is missing; fail if compilation fails."
                "\\`\\\\includegraphics<2->\\[width=0.3\\\\textwidth\\]{fig_slides/a.png}\\'"
                (buffer-substring (plist-get (nth 0 elements) :beg)
                                  (plist-get (nth 0 elements) :end)))))))
+
+;; Found by fuzzing: macro arguments being typed, with unbalanced
+;; brackets, must not break the scan.
+(ert-deftest bgt-scan-tolerates-unbalanced-arguments ()
+  (bgt-with "\\begin{frame}{F}\n\\includegraphics[width= \\begin{block}{B}x\\end{block}\n\\end{frame}\n"
+    (should (equal (mapcar (lambda (e) (plist-get e :name))
+                           (plist-get (beamer-gui-frame-model (point-min) (point-max)) :elements))
+                   '("block"))))
+  (bgt-with "\\begin{frame}{F}\n\\begin{block}{B}x\n\\end{frame}\n"
+    (should-error (beamer-gui-frame-model (point-min) (point-max)) :type 'user-error)))
 
 (ert-deftest bgt-frame-bounds ()
   (bgt-with bgt-frame

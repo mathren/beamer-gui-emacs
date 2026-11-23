@@ -532,11 +532,19 @@ class TextItem(RawItem):
         return self.text
 
     def mouseDoubleClickEvent(self, event):
-        text, ok = QInputDialog.getMultiLineText(None, "Text", "LaTeX text:", self.text)
-        if ok:
-            self.text = text
-            self.picture = None       # shown as plain text until saved
-            self.update()
+        text, label = self.text, "LaTeX text:"
+        while True:
+            text, ok = QInputDialog.getMultiLineText(None, "Text", label, text)
+            if not ok:
+                return
+            text = core.escape_percent(text)
+            problem = core.text_problem(text)
+            if not problem:
+                break
+            label = f"LaTeX text ({problem}):"
+        self.text = text
+        self.picture = None           # shown as plain text until saved
+        self.update()
 
     def to_dict(self):
         x, y = self.frac_pos()

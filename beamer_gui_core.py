@@ -258,3 +258,35 @@ def join_tint(name, tint):
     if not name:
         return ""
     return name if tint >= 100 else f"{name}!{tint}"
+
+
+# ---- LaTeX text typed by the user ------------------------------------------------
+
+def escape_percent(text):
+    """Return TEXT with unescaped % escaped: a % would comment out the
+    end of the TikZ line holding the text."""
+    return re.sub(r"(?<!\\)((?:\\\\)*)%", r"\1\\%", text)
+
+
+def text_problem(text):
+    """Return why TEXT cannot be put in a TikZ node, or None.
+
+    Braces must balance (escaped \\{ and \\} do not count) and the
+    text must not end with an unpaired backslash."""
+    depth = 0
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            if i + 1 == len(text):
+                return "the text ends with a backslash"
+            i += 2
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth < 0:
+                return "a } has no matching {"
+        i += 1
+    return "a { has no matching }" if depth else None

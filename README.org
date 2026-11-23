@@ -101,7 +101,10 @@ A frame background is a group around the frame:
 back in the text flow.  A moved =textblock= keeps its own units.
 
 Positions come from LaTeX itself: the frame is compiled with
-invisible markers recording where each element is.  Only elements on
+invisible markers recording where each element is.  In a frame too
+tall for the slide (LaTeX warns "Overfull \vbox"), TeX shrinks the
+spacing, and moving an element can shift the rest by a point or two;
+in frames that fit, nothing else moves.  Only elements on
 the last slide of a frame with overlays can be edited, and in Org
 buffers only the shapes the GUI draws.
 
