@@ -1,3 +1,4 @@
 __pycache__/
 patches/*
 *.elc
+test/fuzz/fuzz-failures/
