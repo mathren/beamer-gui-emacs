@@ -3,13 +3,14 @@
 #+NEXT_PAGE:     usage.org
 
 =beamer-gui= edits the frames of a LaTeX beamer presentation in a
-graphical window started from Emacs.  The elements of a frame --
-images, blocks, tcolorboxes, lists, tables, textblocks -- are moved and
-resized with the mouse.  Arrows, ellipses, rectangles and text are
-added with the colours of the document.  Every change is written to the
-LaTeX source, which is recompiled after each save; the source stays the
-reference, and the code written is plain LaTeX, framed by two comment
-lines (see [[file:code.org][Code]]).
+graphical window started from Emacs.  Images, blocks, tcolorboxes,
+lists, tables and textblocks are moved and resized with the mouse.
+Arrows, ellipses, rectangles and text are added with the colours of
+the document.
+
+Each change is written to the LaTeX source, which is then compiled
+again.  The code written is plain LaTeX between two comment lines
+(see [[file:code.org][Code]]).
 
 #+CAPTION: Moving an image, pasting a figure, adding an arrow.
 #+ATTR_HTML: :width 75%

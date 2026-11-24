@@ -45,7 +45,7 @@ def resolve_image(file, tex_dir, graphics_path=()):
 
 
 def clamp(value, low=-0.5, high=1.5):
-    """Return VALUE limited to [LOW, HIGH]: elements may overhang the page."""
+    """Return VALUE limited to [LOW, HIGH].  Elements may overhang the page."""
     return max(low, min(high, value))
 
 
@@ -60,10 +60,10 @@ HANDLES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
 def resize_box(box, handle, dx, dy, aspect=None, min_size=10.0, max_size=None):
     """Return BOX (x, y, w, h) resized by dragging HANDLE by DX, DY.
 
-    HANDLE is a compass point of HANDLES; the opposite side or corner
-    stays fixed.  With ASPECT (height / width) the ratio is kept: an
-    edge handle drives its own dimension, a corner the one moved most.
-    Sizes are kept between MIN_SIZE and MAX_SIZE (w, h)."""
+    HANDLE is a compass point of HANDLES.  The opposite side or corner
+    stays fixed.  ASPECT, height over width, is kept if given.  An edge
+    handle then sets its own dimension, and a corner the dimension
+    moved most.  Sizes stay between MIN_SIZE and MAX_SIZE (w, h)."""
     x, y, w, h = box
     left, top, right, bottom = x, y, x + w, y + h
     if "w" in handle:
@@ -237,14 +237,15 @@ SNAP_TOLERANCE = 6.0    # pixels
 
 
 def box_lines(x, y, w, h):
-    """Return the vertical and horizontal lines of a box: edges and centre."""
+    """Return the x of the edges and centre of a box, then their y."""
     return (x, x + w / 2, x + w), (y, y + h / 2, y + h)
 
 
 def snap_offset(values, targets, tolerance=SNAP_TOLERANCE):
     """Return (DELTA, TARGET) moving one of VALUES onto one of TARGETS.
 
-    The smallest move within TOLERANCE wins; (0, None) if none."""
+    The smallest move within TOLERANCE wins.  Return (0, None) if none
+    is within it."""
     best = None
     for v in values:
         for t in targets:
@@ -275,8 +276,9 @@ def join_tint(name, tint):
 # ---- LaTeX text typed by the user ------------------------------------------------
 
 def escape_percent(text):
-    """Return TEXT with unescaped % escaped: a % would comment out the
-    end of the TikZ line holding the text."""
+    """Return TEXT with each unescaped % escaped.
+
+    A % would comment out the rest of the TikZ line holding the text."""
     return re.sub(r"(?<!\\)((?:\\\\)*)%", r"\1\\%", text)
 
 
@@ -326,13 +328,13 @@ def inside(box, x, y):
 
 
 def click_target(words, x, y, region=None, exclude=(), tolerance=0.01):
-    """Describe the word clicked at X, Y for the Emacs side.
+    """Describe the word clicked at X, Y, for Emacs to find.
 
     WORDS are (X0, Y0, X1, Y1, TEXT) in page fractions, in reading
-    order.  Only words in REGION (a box), or with no REGION outside all
-    EXCLUDE boxes, count: those of the clicked element, or the text
-    outside elements.  Return a dict: word, nth (earlier occurrences of
-    the same word there), before and after (two neighbours each)."""
+    order.  The words counted are those in REGION, the box of the
+    clicked element.  Without REGION, they are those outside all
+    EXCLUDE boxes.  Return a dict with the word, nth (how many times it
+    occurs before), and before and after (two neighbours each)."""
     def counts(w):
         cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
         if region is not None:

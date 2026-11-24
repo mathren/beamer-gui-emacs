@@ -29,7 +29,7 @@ import pymupdf
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 TOL = 0.5
-UNIQUE = r"E\d+w|Plainword\d+|T\d+|A\d+|Box\d+"
+UNIQUE = r"E\d+w|Plainword\d+|T\d+|A\d+|Box\d+|L\d+|V\d+|H\d+"
 
 
 def emacs(form):
@@ -64,7 +64,8 @@ class Gen:
         self.n += 1
         n, w = self.n, self.word(self.n)
         kind = r.choice(["image", "block", "alertblock", "tcolorbox", "itemize", "tabular",
-                         "textblock*", "textblock", "enumerate", "tikzpicture"])
+                         "textblock*", "textblock", "enumerate", "tikzpicture",
+                         "member", "varblock", "movie"])
         width = r.choice(["0.2\\textwidth", "3cm", "0.3\\linewidth"])
         code = {
             "image": f"\\includegraphics[width={width}]{{example-image-a}}",
@@ -81,7 +82,14 @@ class Gen:
             "textblock": (f"\\begin{{textblock}}{{2}}[0,0]({r.uniform(1, 8):.1f},"
                           f"{r.uniform(1, 7):.1f})\n  {w}\n\\end{{textblock}}"),
             "tikzpicture": f"\\begin{{tikzpicture}}\\node[draw] {{{w}}};\\end{{tikzpicture}}",
+            "member": (f"\\member{r.choice(['', '[30pt]'])}{{example-image-b}}"
+                       f"{{{w}}}{{L{n}}}"),
+            "varblock": (f"\\begin{{varblock}}{r.choice(['', '<1->', '[0.5\\textwidth]'])}"
+                         f"{{V{n}}}\n  {w}\n\\end{{varblock}}"),
+            "movie": f"\\movie[width=2cm,height=1cm]{{{w}}}{{film{n}.mp4}}",
         }[kind]
+        if r.random() < 0.2:            # annotations, not elements
+            code += f" \\tikzmark{{m{n}}}\\hcancel{{H{n}}}"
         name = {"image": "includegraphics"}.get(kind, kind)
         words = [] if kind == "image" else [w]
         if kind == "tcolorbox":
@@ -90,6 +98,10 @@ class Gen:
             words = [w, f"T{n}"]
         if kind == "alertblock":
             words = [w, f"A{n}"]
+        if kind == "member":
+            words = [w, f"L{n}"]
+        if kind == "varblock":
+            words = [w, f"V{n}"]
         self.elements.append((name, words))
         wrap = r.random()
         if kind in ("image", "tabular", "tikzpicture") and wrap < 0.4:
@@ -120,9 +132,22 @@ class Gen:
                 "\\begin{frame}{Other}\nOtherframeword\n\\end{frame}\n")
 
 
+# Definitions in the style of beamer_template_mrenzo's setup.tex.
+DEFINITIONS = r"""\usepackage{multimedia}
+\newcommand\tikzmark[1]{\tikz[remember picture,overlay]\node (#1) {};}
+\newcommand{\hcancel}[1]{\tikz[baseline=(t.base)]{\node[inner sep=0pt] (t) {#1};}}
+\newcommand{\member}[4][40pt]{%
+  \begin{tabular}[t]{@{}c@{}}\includegraphics[width=#1]{#2}\\#3\\#4\end{tabular}}
+\newenvironment<>{varblock}[2][.9\textwidth]{%
+  \begin{actionenv}#3\def\insertblocktitle{#2}\par\usebeamertemplate{block begin}}
+  {\par\usebeamertemplate{block end}\end{actionenv}}
+"""
+
+
 def document(gen, preamble):
     return ("\\documentclass{beamer}\n\\usepackage{tcolorbox}\n\\usepackage{tikz}\n"
-            + preamble + "\\begin{document}\n" + gen.frame() + "\\end{document}\n")
+            + DEFINITIONS + preamble + "\\begin{document}\n" + gen.frame()
+            + "\\end{document}\n")
 
 
 def compile_words(tex):

@@ -6,15 +6,16 @@
 
 | File                 | Content                                            |
 |----------------------+----------------------------------------------------|
-| =beamer-gui.el=      | Emacs side: parsing, measuring, writing the code   |
+| =beamer-gui.el=      | the Emacs side: reading, measuring, writing code   |
 | =beamer_gui.py=      | the editor window (PySide6)                        |
 | =beamer_gui_core.py= | the editor's functions that need no Qt             |
 | =quicktry.el=        | the =emacs -Q= sample                              |
 | =publish.el=         | this site, from =docs/=                            |
 
-The two sides exchange one JSON object per line: the editor writes
-saves and clicks to its standard output, Emacs answers with the file of
-the new session after each compilation.
+The two sides exchange one JSON object per line.  The editor sends
+saves and clicks on its standard output.  Emacs answers on its
+standard input with the new session after each compilation, or with
+an error.
 
 * Tests
 
@@ -33,8 +34,8 @@ make check-version               # the header is X.Y.Z
 make check-version TAG=v0.2.1    # and matches the tag
 #+end_src
 
-The version is the =;; Version:= header of =beamer-gui.el=; the site's
-footer reads it.
+The version is the =;; Version:= header of =beamer-gui.el=.  The
+site's footer reads it.
 
 The layout tests move each kind of element, twice, in top-aligned and
 centred frames, and check that every other word of the slide stays

@@ -3,16 +3,21 @@
 
 Usage: beamer_gui.py SESSION.json
 
-SESSION.json is written by beamer-gui.el.  Protocol with Emacs, one
-JSON object per line:
+beamer-gui.el writes SESSION.json and starts this program.  The two
+exchange one JSON object per line.  The editor writes to stdout:
 
-  stdout  {"items": [...]}            on save, elements in stacking order
-  stdin   {"session": "new.json"}     after Emacs rewrote and recompiled
+  {"items": [...], "background": {...}}   a save; items in stacking order
+  {"goto": {...}}                          a click on text
 
-The frame PDF has the frame twice: page_a with every element (used
-to crop pictures of elements of the text), page_b without them (the
-background), and page_s with colour swatches.  Element coordinates
-are fractions of the page, origin at the top left.
+Emacs writes to stdin:
+
+  {"session": "new.json"}                  after a save and a compilation
+  {"error": "..."}                         when LaTeX fails
+
+The PDF holds the frame twice.  page_a shows every element and gives
+the pictures of the elements of the text.  page_b, the background,
+hides them.  page_s holds the colour swatches.  Coordinates are
+fractions of the page, from the top left corner.
 """
 import json
 import os
@@ -45,6 +50,10 @@ ARROW_HEAD = 4.0                # arrow head length, in line widths
 
 
 # ---- rendering ------------------------------------------------------------
+
+# MuPDF prints harmless errors for \movie annotations.
+pymupdf.TOOLS.mupdf_display_errors(False)
+
 
 def render_pdf(path, width, page=-1):
     """Return PAGE of the PDF at PATH as a QPixmap WIDTH pixels wide."""
@@ -85,7 +94,7 @@ def placeholder_pixmap():
 # ---- elements -------------------------------------------------------------
 
 class Handle(QGraphicsRectItem):
-    """Draggable square child of an arrow; reports its scene position."""
+    """Draggable end of an arrow; reports its scene position."""
 
     def __init__(self, parent, on_move):
         super().__init__(-HANDLE / 2, -HANDLE / 2, HANDLE, HANDLE, parent)
@@ -259,8 +268,8 @@ class BoxItem(QGraphicsRectItem, Element):
         if (change == QGraphicsItem.ItemPositionChange and not self.drag
                 and self.editor.snap_active(self)):
             return self.snapped_position(value)
-        # A selected element comes to the front, so its handles can be
-        # grabbed even where another element overlaps them.
+        # A selected element comes to the front, so that its handles stay
+        # reachable under other elements.
         if change == QGraphicsItem.ItemSelectedHasChanged:
             self.setZValue(1 if value else 0)
         return super().itemChange(change, value)
@@ -729,10 +738,10 @@ def color_icon(color):
 
 
 class BackgroundDialog(QDialog):
-    """Choose the frame's background colour (with a tint) and image.
+    """Choose the background colour, with a tint, and image of the frame.
 
-    The image covers the page; a colour shows where the image is
-    transparent, or alone."""
+    The image covers the page.  The colour shows through transparent
+    parts of the image, or alone."""
 
     def __init__(self, editor, background):
         super().__init__(editor)
@@ -797,8 +806,8 @@ class Editor(QMainWindow):
         self.background = QGraphicsPixmapItem()
         self.background.setZValue(-1)
         self.scene.addItem(self.background)
-        # Strong references: PySide may otherwise drop the Python
-        # wrappers of items created in callbacks.  Order = stacking order.
+        # Keep the items, as PySide may drop the Python wrappers of items
+        # made in callbacks.  The list order is the stacking order.
         self.elements = []
         self.last_style = {}
         self.snapping = True        # toolbar toggle
@@ -808,8 +817,8 @@ class Editor(QMainWindow):
         for guide in self.guides:
             guide.setZValue(20)
             guide.hide()
-        # Images opened in another program: saving them there updates the
-        # slide, once the program has finished writing (debounced).
+        # Recompile when an image open in another program is saved, once
+        # the program stops writing.
         self.watcher = QFileSystemWatcher(self)
         self.watcher.fileChanged.connect(self.image_changed)
         self.image_timer = QTimer(self)
@@ -919,7 +928,7 @@ class Editor(QMainWindow):
         if element is not None and element.label in ("includegraphics", "image"):
             info = dict(info, word="")      # letters in a picture are not in the source
         if not element and not info["word"]:
-            # No text here: a drawn shape or image jumps to its block.
+            # No text here.  A drawn shape or image jumps to its block.
             element = self.element_at(scene_pos)
         info["element"] = element.id if element else None
         return info
@@ -1057,7 +1066,7 @@ class Editor(QMainWindow):
     def clipboard_image(self):
         """Save the clipboard image in the image directory; return its name.
 
-        A copied image file is copied as is (PDFs stay vector); a
+        A copied image file is copied as it is, so PDFs stay vector.  A
         bitmap is saved as PNG.  Return None if there is no image."""
         clipboard = QApplication.clipboard()
         mime = clipboard.mimeData()
@@ -1135,7 +1144,7 @@ class Editor(QMainWindow):
 
     # protocol
     def items_dicts(self):
-        """Elements in stacking order: later ones are drawn on top."""
+        """Return the elements as dicts, in stacking order."""
         return [e.to_dict() for e in self.elements]
 
     def save(self):
@@ -1156,7 +1165,7 @@ class Editor(QMainWindow):
         self.handle_message(message)
 
     def handle_message(self, message):
-        """Act on a MESSAGE from Emacs: an error to show, or a new session."""
+        """Show an error or load a new session sent by Emacs."""
         if "error" in message:
             self.statusBar().showMessage(message["error"])
         if "session" in message:

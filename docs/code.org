@@ -2,9 +2,9 @@
 #+PREVIOUS_PAGE: usage.org
 #+NEXT_PAGE:     development.org
 
-Everything the editor writes or changes is framed by two comment lines.
-Code outside them is not touched, and a save without changes leaves
-the file as it was.
+The editor frames the code it writes or changes with two comment
+lines.  It does not touch code outside them.  A save without changes
+leaves the file unchanged.
 
 * Shapes
 

@@ -18,6 +18,15 @@
     (while (not result) (accept-process-output nil 0.05))
     (if (stringp result) (cons result tmp) (error "LaTeX failed: %s" (car result)))))
 
+(defun fuzz--definitions ()
+  "Return the definitions of the current buffer's preamble."
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward beamer-gui--document-begin-regexp)
+    (beamer-gui-document-definitions
+     (beamer-gui--preamble-sources (buffer-substring-no-properties (point-min) (point))
+                                   default-directory))))
+
 (defun fuzz-random (lo hi)
   "Return a random float between LO and HI."
   (+ lo (* (- hi lo) (/ (random 100000) 100000.0))))
@@ -31,6 +40,7 @@
 With NOOP, send the items back unchanged."
   (random (format "%s" seed))
   (with-current-buffer (find-file-noselect file)
+    (setq beamer-gui--document-definitions (fuzz--definitions))
     (goto-char (point-min))
     (re-search-forward beamer-gui--frame-begin-regexp)
     (let* ((b (beamer-gui-frame-bounds))
@@ -73,7 +83,8 @@ With NOOP, send the items back unchanged."
                            (plist-put (copy-sequence item) :opts
                                       (fuzz-pick '("draw=blue, very thick" "dashed, draw=red"
                                                    "draw=blue, fill=red, fill opacity=0.3"
-                                                   "" "line cap=round, thin"))))
+                                                   "" "line cap=round, thin"
+                                                   "draw opacity=0.4, dotted"))))
                           (t item))))
                      items)))
         (dotimes (_ (random 3))
@@ -81,10 +92,13 @@ With NOOP, send the items back unchanged."
                 (x (fuzz-random 0.05 0.7)) (y (fuzz-random 0.05 0.7)))
             (push (pcase (random 4)
                     (0 (list :kind "arrow" :id id :x1 x :y1 y :x2 (+ x 0.1) :y2 (+ y 0.15)
-                             :opts (fuzz-pick '("" "draw=blue, bend left=30" "<->, thin"))))
+                             :opts (fuzz-pick '("" "draw=blue, bend left=30" "<->, thin"
+                                                "-latex" "|-|, draw opacity=0.5"
+                                                "stealth-stealth"))))
                     (1 (list :kind "ellipse" :id id :x x :y y :w 0.1 :h 0.05 :opts "draw=red"))
                     (2 (list :kind "rect" :id id :x x :y y :w 0.1 :h 0.05
-                             :opts "draw=blue, fill=red, fill opacity=0.2"))
+                             :opts (fuzz-pick '("draw=blue, fill=red, fill opacity=0.2"
+                                                "rounded corners=6pt"))))
                     (3 (list :kind "text" :id id :x x :y y :w 0.2 :opts "text=blue"
                              :text (fuzz-pick '("Fuzz {text} $x^2$" "Two\\\\lines" "50\\% off")))))
                   items)))
@@ -107,6 +121,7 @@ With NOOP, send the items back unchanged."
 (defun fuzz--measure (file)
   "Measure the first frame of FILE; return (BOUNDS MEASUREMENTS PDF)."
   (with-current-buffer (find-file-noselect file)
+    (setq beamer-gui--document-definitions (fuzz--definitions))
     (goto-char (point-min))
     (re-search-forward beamer-gui--frame-begin-regexp)
     (let* ((b (beamer-gui-frame-bounds))
@@ -143,6 +158,7 @@ With NOOP, send the items back unchanged."
 (defun fuzz-clicks (file clicks-file out)
   "Jump to each click of CLICKS-FILE in FILE; write what point lands on to OUT."
   (with-current-buffer (find-file-noselect file)
+    (setq beamer-gui--document-definitions (fuzz--definitions))
     (goto-char (point-min))
     (re-search-forward beamer-gui--frame-begin-regexp)
     (let* ((b (beamer-gui-frame-bounds))

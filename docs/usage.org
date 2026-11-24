@@ -4,21 +4,19 @@
 
 * Opening a frame
 
-Once per document, =M-x beamer-gui-insert-preamble= adds the few
-preamble lines the generated code needs (or updates them).  Then, with
-point in a frame, =C-c M-g= (=beamer-gui-edit-frame=) compiles the
-frame and opens it in the editor window.  The key is in
-=beamer-gui-mode=, enabled in LaTeX buffers by the =:hook= above.
+Once per document, =M-x beamer-gui-insert-preamble= adds or updates
+the preamble lines the written code needs.  Then, with point in a
+frame, =C-c M-g= (=beamer-gui-edit-frame=) compiles the frame and opens
+it in the editor.  The key belongs to =beamer-gui-mode=.
 
-The frame is compiled alone, with the document's preamble and with
-beamer's note options turned off, so the window shows the slide.
+The frame is compiled alone, with the document's preamble.  Note
+options are turned off, so the window shows the slide only.
 
-When something is missing, a message says what: no
-=\documentclass= in the file (the frame and the preamble must be in the
-same file), a class other than beamer (it asks before going on), point
-outside a frame, =pdflatex= or Python not found, Python packages missing
-(the editor stops at once).  When LaTeX fails, the first error is shown
-in Emacs and in the editor's status bar.
+A message names what is missing: a =\documentclass= in the file,
+which must hold both the frame and the preamble; a frame around
+point; =pdflatex=; Python or its packages.  For a class other than
+beamer, it asks before going on.  When LaTeX fails, its first error
+is shown in Emacs and in the editor.
 
 * In the editor
 
@@ -36,13 +34,13 @@ in Emacs and in the editor's status bar.
 | =Del=             | delete the selected shapes                                 |
 | =C-s=             | write the changes to the buffer and recompile              |
 
-Elements of the frame are any environment of it, every
-=\includegraphics= and =\movie=, and the commands of the preamble (and
-the files it =\input=s) that draw a picture, such as a =\member= showing
-a photo with a name.  An optional first argument that is a length, as
-in =\begin{varblock}[0.5\textwidth]=, is the width: resizing changes
-it.  TikZ annotations of other text (=\tikzmark=, arrows between marks,
-strike-outs) are not elements.  =columns=, =center=, =minipage= and the overlay
+The elements of a frame are its environments, its =\includegraphics=
+and =\movie=, and the preamble's commands that draw a picture, such
+as a =\member= showing a photo and a name.  The preamble includes the
+files it =\input=s.  An optional first argument that is a length, as
+in =\begin{varblock}[0.5\textwidth]=, is the width, and resizing
+changes it.  TikZ annotations of other text, such as =\tikzmark=, are
+not elements.  =columns=, =center=, =minipage= and the overlay
 environments are looked into, not moved; verbatim environments are
 skipped.
 
@@ -52,14 +50,14 @@ fill opacity and rounded corners of the selected shapes.  Its colours are those
 the preamble defines, and the files it =\input=s, then the standard
 named colours.
 
-While one element is dragged, its edges and centre snap to those of
-the other elements and of the page, within 6 pixels, and a guide line
-shows the alignment.
+A dragged element snaps its edges and centre to those of other
+elements and of the page, within 6 pixels.  A guide line shows the
+alignment.
 
-Clicking text jumps to it in the source: the word clicked, its
-neighbours and the element it belongs to are looked up in the frame.
-Text with no literal source (maths, accents, numbers of a list) jumps
-to the nearest word that has one.
+Clicking text moves Emacs to it in the source.  The word, its
+neighbours and its element are looked up in the frame.  Text not
+written literally in the source, such as maths, jumps to the nearest
+word that is.
 
 * Commands
 
