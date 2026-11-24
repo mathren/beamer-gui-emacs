@@ -151,7 +151,10 @@ def test_line_width_and_bend():
 # ---- offscreen GUI ---------------------------------------------------------
 
 pytest.importorskip("PySide6")
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("pymupdf")
+# Offscreen even on a desktop: a Wayland or X session sets its own
+# platform, where windows and mouse events depend on the compositor.
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtCore import QPointF  # noqa: E402
 import beamer_gui  # noqa: E402
 
