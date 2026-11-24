@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Mathieu Renzo
 
 ;; Author: Mathieu Renzo
-;; Version: 0.0.2
+;; Version: 0.0.3
 ;; Package-Requires: ((emacs "30.1"))
 ;; Keywords: tex, tools, multimedia
 ;; URL: https://github.com/mathren/beamer-gui-emacs
