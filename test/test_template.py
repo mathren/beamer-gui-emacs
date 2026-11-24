@@ -52,11 +52,16 @@ def words(tex):
     return found, doc[0].rect
 
 
+# The template may hold images pasted with beamer-gui: copy all of it,
+# but not its git data or LaTeX output.
+IGNORE = shutil.ignore_patterns(".git", "*.aux", "*.log", "*.nav", "*.out", "*.snm",
+                                "*.toc", "*.pdf", "*.synctex.gz")
+
+
 @pytest.fixture(scope="module")
 def deck(tmp_path_factory):
-    d = tmp_path_factory.mktemp("template")
-    for f in ("template.tex", "setup.tex"):
-        shutil.copy(os.path.join(TEMPLATE, f), d)
+    d = tmp_path_factory.mktemp("template") / "deck"
+    shutil.copytree(TEMPLATE, d, ignore=IGNORE)
     tex = str(d / "template.tex")
     emacs(f"(with-current-buffer (find-file-noselect {q(tex)}) "
           "(beamer-gui-insert-preamble) (save-buffer))")
@@ -81,9 +86,8 @@ def cases():
 @pytest.mark.parametrize("frame,element", cases())
 def test_move_template_element(deck, tmp_path, frame, element):
     src, _ = deck
+    shutil.copytree(os.path.dirname(src), tmp_path, dirs_exist_ok=True, ignore=IGNORE)
     tex = str(tmp_path / "template.tex")
-    shutil.copy(src, tex)
-    shutil.copy(os.path.join(os.path.dirname(src), "setup.tex"), tmp_path)
     before, page = words(tex)
     dx, dy = 0.05, 0.04
     emacs(f"(layout-move-in-frame {q(tex)} {frame} {q(element)} {dx})")
